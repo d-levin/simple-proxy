@@ -24,23 +24,26 @@
 #include <thread>
 #include <chrono>
 
-#define BUF_SIZE 1024
-#define SERVER_PORT 1
+#define LISTEN_PORT 1
 #define MAX_CONN 5
-#define MAX_THREADS 1
-#define QUEUE_SIZE 1000
+#define MAX_THREADS 1 // Set to 30
 
-// Set to 1 to enable debug messages
-#define DEBUG 1
+// Array sizes
+#define QUEUE_SIZE 10000
+#define MSG_BUF_SIZE 1000000
+
+// Comment out to disable debug messages
+#define DEBUG
 
 // Multithreading and thread safety
 pthread_mutex_t count_mutex;
 std::queue<int>* socketQ;
-std::queue<struct sockaddr_in>* clientQ;
 sem_t job_queue_count;
-unsigned int num_threads;
-int server_s;
+static int server_s;
 pthread_t consumer;
+
+// Controls termination of program
+static volatile bool done = 0;
 
 // Custom error handling
 void error(const char *err) {

@@ -8,11 +8,20 @@
 #include "p2.h"
 using namespace std;
 
+#ifdef DEBUG
+void delay(unsigned int sec) {
+	this_thread::sleep_for(chrono::seconds(sec));
+}
+#endif
+
 // Handles CTRL-C signals
 void termination_handler(int signum) {
 	printf("\nTerminating program.\n");
-	cleanup();
-	exit(EXIT_SUCCESS);
+	fflush(stdout);
+	done = 1;
+	if (server_s > 0) {
+		close(server_s);
+	}
 }
 
 // Send a message to given connection
@@ -30,108 +39,96 @@ void sendMsg(int s, int size, char *ptr) {
 	}
 }
 
-void* runner(void* s) {
-	// Give thread back to pool on completion
-	pthread_mutex_lock(&count_mutex);
-	num_threads--;
-	pthread_mutex_unlock(&count_mutex);
-	// Send test message back to connected client via file descriptor
-	int sock = *((int*) s);
-	char buf[BUF_SIZE];
-	sprintf(buf, "This is a message for fd = %d from thread = %d\n", sock,
-			pthread_self());
-	sendMsg(sock, BUF_SIZE, buf);
+//void* runner(void* s) {
+//	// Send test message back to connected client via file descriptor
+//	int sock = *((int*) s);
+//	char buf[MSG_BUF_SIZE];
+//	sprintf(buf, "This is a message for fd = %d from thread = %d\n", sock,
+//			pthread_self());
+//	sendMsg(sock, MSG_BUF_SIZE, buf);
+//
+//	// When should socket be closed?
+//	//close(sock);
+//
+//	// Keep thread alive for testing
+//	sleep(10);
+//	printf("Thread awake\n");
+//	fflush(stdout);
+//
+//	pthread_exit(EXIT_SUCCESS);
+//	return 0;
+//}
 
-	// When should socket be closed?
-	//close(sock);
-
-	// Keep thread alive for testing
-	sleep(10);
-	printf("Thread awake\n");
+void* consume(void* t) {
+#ifdef DEBUG
+	int tid = *((int*) t);
+	printf("I am thread = %d\n", tid);
 	fflush(stdout);
+#endif
 
-	// Give thread back to pool on completion
-	pthread_mutex_lock(&count_mutex);
-	num_threads++;
-	pthread_mutex_unlock(&count_mutex);
+	while (!done) {
+		delay(2);
+		printf("I am thread\n");
+		fflush(stdout);
+//		// Consumer waits for items to process
+//		sem_wait(&job_queue_count);
+//
+//		pthread_mutex_lock(&count_mutex);
+//		if (socketQ->size() > 0) {
+//			int sock = socketQ->front();
+//			socketQ->pop();
+//			close(sock);
+//#ifdef DEBUG
+//			printf("Thread id %lu consumed socket %d\n", tid, sock);
+//#endif
+//		}
+//		pthread_mutex_unlock(&count_mutex);
+	}
+
 	pthread_exit(EXIT_SUCCESS);
 	return 0;
 }
 
-void* consume(void* tid) {
-	while (1) {
-		// Delay for a bit
-		this_thread::sleep_for(chrono::seconds(2));
-
-		if (DEBUG) {
-			printf("I am consumer\n");
-			printf("Number of available threads = %d\n", num_threads);
-			fflush(stdout);
-		}
-
-		// Wait for producer to produce
-		sem_wait(&job_queue_count);
-
-		pthread_mutex_lock(&count_mutex);
-		// Maybe change this to a while loop, else only one
-		// item will get change per sem_post
-		if (num_threads > 0) {
-			while (!socketQ->empty()) {
-				int sock = socketQ->front();
-				socketQ->pop();
-
-				// Start consuming
-				pthread_t tid;
-				if (pthread_create(&tid, NULL, runner, (void*) &sock) < 0) {
-					error("Could not create consumer thread");
-				}
-
-				if (DEBUG) {
-					printf("Job consumed!\n");
-					printf("Size of job queue = %lu\n", socketQ->size());
-				}
-			}
-		}
-		pthread_mutex_unlock(&count_mutex);
-	}
-	return 0;
-}
-
 void cleanup() {
-	// Wake up consumer thread
-	pthread_kill(consumer, 0);
 	pthread_mutex_destroy(&count_mutex);
 	sem_destroy(&job_queue_count);
 	delete[] socketQ;
-	if (server_s >= 0) {
-		close(server_s);
-	}
-
 }
 
 int main(int argc, char *argv[]) {
 	// Check number of arguments
 	if (argc < 2) {
-		printf("usage: ./proxy <port>\n");
-		exit(EXIT_SUCCESS);
+		error("usage: ./proxy <port>\n");
 	}
 
 	// Exit Handler
 	// Quit on CTRL-C
 	signal(SIGINT, termination_handler);
 
-	// Initialize variables for synchronization and multi-threading
+	// Synchronization
 	pthread_mutex_init(&count_mutex, NULL);
 	sem_init(&job_queue_count, 0, 0);
-	num_threads = MAX_THREADS;
 
-	// Set up connection and start sending/receiving
-	// Create structs and zero out
+	// Thread pool
+	pthread_t pool[MAX_THREADS];
+
+	// Start consumer threads
+	for (int i = 0; i < MAX_THREADS; i++) {
+#ifdef DEBUG
+		printf("Creating thread %d\n", i);
+		fflush(stdout);
+#endif
+		if (pthread_create(&pool[i], NULL, consume, NULL) < 0) {
+			error("Could not create consumer thread");
+		}
+	}
+
+	// Set up server to listen for incoming connections
 	struct sockaddr_in server;
 	memset(&server, 0, sizeof(server));
 
-	// Set struct properties
-	int port = atoi(argv[SERVER_PORT]);
+	// Set server struct properties
+	int port = atoi(argv[LISTEN_PORT]);
 	server.sin_family = AF_INET;
 	server.sin_addr.s_addr = INADDR_ANY;
 	server.sin_port = htons(port);
@@ -140,12 +137,14 @@ int main(int argc, char *argv[]) {
 	server_s = socket(AF_INET, SOCK_STREAM, 0);
 
 	// Socket failed
-	if (server_s < 0)
+	if (server_s < 0) {
 		error("Failed to open socket");
+	}
 
 	// Bind
-	if (bind(server_s, (struct sockaddr*) &server, sizeof(server)) < 0)
+	if (bind(server_s, (struct sockaddr*) &server, sizeof(server)) < 0) {
 		error("Failed to bind");
+	}
 
 	// Wait for connections
 	// Accepting up to MAX_CONN pending connections
@@ -154,24 +153,20 @@ int main(int argc, char *argv[]) {
 		error("Failed to listen");
 	}
 
-	// Start consuming
-	if (pthread_create(&consumer, NULL, consume, consumer) < 0) {
-		error("Could not create consumer thread");
-	}
-
 	// Queue stores client connections
-	// Number of connections limited to MAXCONN
+	// Number of connections limited to QUEUE_SIZE
 	socketQ = new queue<int> [QUEUE_SIZE];
 
 	// Start producing
 	struct sockaddr_in client;
 	memset(&client, 0, sizeof(client));
 	socklen_t csize = sizeof(client);
-	while (1) {
+	while (!done) {
 		// Accept client connection
 		int client_s = accept(server_s, (struct sockaddr*) &client, &csize);
 
-		if (client_s < 0) {
+		// Prevent error from showing if program is exiting
+		if (client_s < 0 && !done) {
 			error("Failed to accept");
 		}
 
@@ -186,14 +181,23 @@ int main(int argc, char *argv[]) {
 		}
 		pthread_mutex_unlock(&count_mutex);
 
-		/***** For debugging *****/
-		if (DEBUG) {
-			printf("Client IP-address = %s\n", inet_ntoa(client.sin_addr));
-			printf("Elements in queue = %lu\n", socketQ->size());
-			fflush(stdout);
-		}
-		/*************************/
+#ifdef DEBUG
+		printf("Client IP-address = %s\n", inet_ntoa(client.sin_addr));
+		printf("Elements in queue = %lu\n", socketQ->size());
+		fflush(stdout);
+#endif
+
 	}
+
+	// Wait for consumers to finish
+	for (int i = 0; i < MAX_THREADS; i++) {
+		printf("Joining thread %d\n", i);
+		fflush(stdout);
+		pthread_join(pool[i], NULL);
+	}
+
+	// Deallocate and cleanup before exit
+	cleanup();
 
 	// Execution never gets here due to termination handler
 	return 0;
