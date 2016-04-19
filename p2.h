@@ -27,7 +27,7 @@
 #define BUF_SIZE 1024
 #define SERVER_PORT 1
 #define MAX_CONN 5
-#define MAX_THREADS 2
+#define MAX_THREADS 1
 #define QUEUE_SIZE 1000
 
 // Set to 1 to enable debug messages
@@ -41,11 +41,6 @@ sem_t job_queue_count;
 unsigned int num_threads;
 int server_s;
 pthread_t consumer;
-
-/****************************/
-
-// Controls main loops
-unsigned int done = 0;
 
 // Custom error handling
 void error(const char *err) {

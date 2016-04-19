@@ -11,20 +11,61 @@ using namespace std;
 // Handles CTRL-C signals
 void termination_handler(int signum) {
 	printf("\nTerminating program.\n");
-	pthread_mutex_lock(&count_mutex);
-	done = 1;
-	pthread_mutex_unlock(&count_mutex);
 	cleanup();
 	exit(EXIT_SUCCESS);
 }
 
+// Send a message to given connection
+void sendMsg(int s, int size, char *ptr) {
+	int sent = 0;
+	while ((size > 0) && (sent = write(s, ptr, size))) {
+		// Check error
+		if (sent < 0) {
+			error("Write failed");
+		}
+		// Move pointer forward in struct by size of sent data
+		ptr += sent;
+		// Keep track of how much data has been sent
+		size -= sent;
+	}
+}
+
+void* runner(void* s) {
+	// Give thread back to pool on completion
+	pthread_mutex_lock(&count_mutex);
+	num_threads--;
+	pthread_mutex_unlock(&count_mutex);
+	// Send test message back to connected client via file descriptor
+	int sock = *((int*) s);
+	char buf[BUF_SIZE];
+	sprintf(buf, "This is a message for fd = %d from thread = %d\n", sock,
+			pthread_self());
+	sendMsg(sock, BUF_SIZE, buf);
+
+	// When should socket be closed?
+	//close(sock);
+
+	// Keep thread alive for testing
+	sleep(10);
+	printf("Thread awake\n");
+	fflush(stdout);
+
+	// Give thread back to pool on completion
+	pthread_mutex_lock(&count_mutex);
+	num_threads++;
+	pthread_mutex_unlock(&count_mutex);
+	pthread_exit(EXIT_SUCCESS);
+	return 0;
+}
+
 void* consume(void* tid) {
-	while (!done) {
+	while (1) {
 		// Delay for a bit
-		std::this_thread::sleep_for(std::chrono::seconds(2));
+		this_thread::sleep_for(chrono::seconds(2));
 
 		if (DEBUG) {
 			printf("I am consumer\n");
+			printf("Number of available threads = %d\n", num_threads);
 			fflush(stdout);
 		}
 
@@ -32,24 +73,32 @@ void* consume(void* tid) {
 		sem_wait(&job_queue_count);
 
 		pthread_mutex_lock(&count_mutex);
-		if (!socketQ->empty()) {
-			int sock = socketQ->front();
-			socketQ->pop();
+		// Maybe change this to a while loop, else only one
+		// item will get change per sem_post
+		if (num_threads > 0) {
+			while (!socketQ->empty()) {
+				int sock = socketQ->front();
+				socketQ->pop();
 
-			if (DEBUG) {
-				printf("Job consumed!\n");
-				printf("Size of job queue = %lu\n", socketQ->size());
+				// Start consuming
+				pthread_t tid;
+				if (pthread_create(&tid, NULL, runner, (void*) &sock) < 0) {
+					error("Could not create consumer thread");
+				}
+
+				if (DEBUG) {
+					printf("Job consumed!\n");
+					printf("Size of job queue = %lu\n", socketQ->size());
+				}
 			}
-			// When should socket be closed?
-			close(sock);
 		}
 		pthread_mutex_unlock(&count_mutex);
 	}
-	pthread_exit((pthread_t) tid);
 	return 0;
 }
 
 void cleanup() {
+	// Wake up consumer thread
 	pthread_kill(consumer, 0);
 	pthread_mutex_destroy(&count_mutex);
 	sem_destroy(&job_queue_count);
@@ -99,6 +148,7 @@ int main(int argc, char *argv[]) {
 		error("Failed to bind");
 
 	// Wait for connections
+	// Accepting up to MAX_CONN pending connections
 	printf("Listening on port %d...\n", port);
 	if (listen(server_s, MAX_CONN) < 0) {
 		error("Failed to listen");
@@ -114,11 +164,10 @@ int main(int argc, char *argv[]) {
 	socketQ = new queue<int> [QUEUE_SIZE];
 
 	// Start producing
-	while (!done) {
-		struct sockaddr_in client;
-		memset(&client, 0, sizeof(client));
-		socklen_t csize = sizeof(client);
-
+	struct sockaddr_in client;
+	memset(&client, 0, sizeof(client));
+	socklen_t csize = sizeof(client);
+	while (1) {
 		// Accept client connection
 		int client_s = accept(server_s, (struct sockaddr*) &client, &csize);
 
@@ -146,6 +195,6 @@ int main(int argc, char *argv[]) {
 		/*************************/
 	}
 
-	// Execution will never get here due to termination handler
+	// Execution never gets here due to termination handler
 	return 0;
 }
