@@ -4,106 +4,82 @@
  *      Author: Dennis Levin
  */
 
+#include <arpa/inet.h>
 #include "p2.h"
 using namespace std;
-
-// Global variables
-unsigned int num_threads;
-
-// Receive a message from given connection
-void getCommand(int new_s, int size, char *ptr) {
-	int received = 0;
-	while ((size > 0) && (received = read(new_s, ptr, size))) {
-		// Check error
-		if (received < 0) {
-			error("Read failed");
-		}
-
-		// Move pointer forward to next piece of data
-		ptr += received;
-
-		// The command has been fully received
-//		if ((*ptr) == '\0') {
-//			printf("Command received\n");
-//			fflush(stdout);
-//			// No need to continue loop
-//			break;
-//		}
-
-// Keep track of how much data has been sent
-// Prevents the buffer from overflowing
-		size -= received;
-	}
-}
 
 // Handles CTRL-C signals
 void termination_handler(int signum) {
 	printf("\nTerminating program.\n");
+	pthread_mutex_lock(&count_mutex);
 	done = 1;
+	pthread_mutex_unlock(&count_mutex);
+	cleanup();
 	exit(EXIT_SUCCESS);
 }
 
-// Thread function
-void *runner(void *vptr_new_s) {
-	// Decrement num_threads to limit number of concurrent threads
-	pthread_mutex_lock(&count_mutex);
-	num_threads--;
-	pthread_mutex_unlock(&count_mutex);
+void* consume(void* tid) {
+	while (!done) {
+		// Delay for a bit
+		std::this_thread::sleep_for(std::chrono::seconds(2));
 
-	// Self-identify if DEBUG on
-	if (DEBUG) {
-		pthread_t ptid = pthread_self();
-		uint64_t tid = 0;
-		memcpy(&tid, &ptid, min(sizeof(tid), sizeof(ptid)));
-		cout << "Thread ID = " << tid << endl;
+		if (DEBUG) {
+			printf("I am consumer\n");
+			fflush(stdout);
+		}
+
+		// Wait for producer to produce
+		sem_wait(&job_queue_count);
+
+		pthread_mutex_lock(&count_mutex);
+		if (!socketQ->empty()) {
+			int sock = socketQ->front();
+			socketQ->pop();
+
+			if (DEBUG) {
+				printf("Job consumed!\n");
+				printf("Size of job queue = %lu\n", socketQ->size());
+			}
+			// When should socket be closed?
+			close(sock);
+		}
+		pthread_mutex_unlock(&count_mutex);
 	}
-
-	// Cast back to int
-	int new_s = *((int*) vptr_new_s);
-
-	// Receive command from client
-	// Browser will send GET requests over the socket
-	char buf[BUF_SIZE];
-	getCommand(new_s, BUF_SIZE, buf);
-	printf("input = %s", buf);
-
-	// Parse the command
-	char *cmd = strtok(buf, " ");
-	char *host = strtok(NULL, " ");
-	char *protocol = strtok(NULL, " ");
-	printf("cmd = %s\n", cmd);
-	printf("host = %s\n", host);
-	printf("protocol = %s\n", protocol);
-	fflush(stdout);
-
-//
-//	// Send response
-//	ptr = (char*) &m;
-//	int sent = 0;
-//	size = sizeof(m);
-//	sendMsg(new_s, size, sent, ptr);
-
-	// Close here after work is done
-	close(new_s);
-
-	// Make space for new thread
-	pthread_mutex_lock(&count_mutex);
-	num_threads++;
-	pthread_mutex_unlock(&count_mutex);
-
-	pthread_exit(EXIT_SUCCESS);
-
+	pthread_exit((pthread_t) tid);
 	return 0;
 }
 
-// Open connection
-// Spawn threads on connect
-void connect(char *argv[]) {
+void cleanup() {
+	pthread_kill(consumer, 0);
+	pthread_mutex_destroy(&count_mutex);
+	sem_destroy(&job_queue_count);
+	delete[] socketQ;
+	if (server_s >= 0) {
+		close(server_s);
+	}
+
+}
+
+int main(int argc, char *argv[]) {
+	// Check number of arguments
+	if (argc < 2) {
+		printf("usage: ./proxy <port>\n");
+		exit(EXIT_SUCCESS);
+	}
+
+	// Exit Handler
+	// Quit on CTRL-C
+	signal(SIGINT, termination_handler);
+
+	// Initialize variables for synchronization and multi-threading
+	pthread_mutex_init(&count_mutex, NULL);
+	sem_init(&job_queue_count, 0, 0);
+	num_threads = MAX_THREADS;
+
+	// Set up connection and start sending/receiving
 	// Create structs and zero out
 	struct sockaddr_in server;
-	struct sockaddr_in client;
 	memset(&server, 0, sizeof(server));
-	memset(&client, 0, sizeof(client));
 
 	// Set struct properties
 	int port = atoi(argv[SERVER_PORT]);
@@ -111,78 +87,65 @@ void connect(char *argv[]) {
 	server.sin_addr.s_addr = INADDR_ANY;
 	server.sin_port = htons(port);
 
-	// Support multithreading
-	pthread_t tid;
-
 	// Open socket
-	int s = socket(AF_INET, SOCK_STREAM, 0);
+	server_s = socket(AF_INET, SOCK_STREAM, 0);
 
 	// Socket failed
-	if (s < 0)
+	if (server_s < 0)
 		error("Failed to open socket");
 
 	// Bind
-	if (bind(s, (struct sockaddr*) &server, sizeof(server)) < 0)
+	if (bind(server_s, (struct sockaddr*) &server, sizeof(server)) < 0)
 		error("Failed to bind");
 
 	// Wait for connections
 	printf("Listening on port %d...\n", port);
-	if (listen(s, MAXCONN) < 0) {
+	if (listen(server_s, MAX_CONN) < 0) {
 		error("Failed to listen");
 	}
 
-	// Loop program
-	// Connection handled by new socket
-	int new_s;
-	socklen_t csize = sizeof(client);
-	while (!done && (new_s = accept(s, (struct sockaddr*) &client, &csize))) {
-		if (new_s < 0) {
+	// Start consuming
+	if (pthread_create(&consumer, NULL, consume, consumer) < 0) {
+		error("Could not create consumer thread");
+	}
+
+	// Queue stores client connections
+	// Number of connections limited to MAXCONN
+	socketQ = new queue<int> [QUEUE_SIZE];
+
+	// Start producing
+	while (!done) {
+		struct sockaddr_in client;
+		memset(&client, 0, sizeof(client));
+		socklen_t csize = sizeof(client);
+
+		// Accept client connection
+		int client_s = accept(server_s, (struct sockaddr*) &client, &csize);
+
+		if (client_s < 0) {
 			error("Failed to accept");
 		}
-		// Create thread
-		// Limit number of threads to MAX_THREADS
-		if (num_threads > 0) {
-			if (pthread_create(&tid, NULL, runner, (void*) &new_s) < 0) {
-				error("Could not create thread");
-			}
-			pthread_detach(tid);
-			//pthread_join(tid, NULL);
+
+		// Add to queue
+		pthread_mutex_lock(&count_mutex);
+		// The number of sockets in the queue are limited to QUEUE_SIZE
+		if (socketQ->size() < QUEUE_SIZE) {
+			socketQ->push(client_s);
+			sem_post(&job_queue_count);
 		} else {
-			// What should happen if no threads available?
-			// Add socket to a queue then pop from queue and create thread?
-			error("No threads available!");
+			error("Socket queue full");
 		}
-	}
-}
+		pthread_mutex_unlock(&count_mutex);
 
-void cleanup() {
-	pthread_mutex_destroy(&count_mutex);
-	sem_destroy(&job_queue_count);
-	delete[] socketQ;
-}
-
-int main(int argc, char *argv[]) {
-	// Check number of arguments
-	if (argc < 2) {
-		printf("Program needs more arguments\n");
-		exit(EXIT_SUCCESS);
+		/***** For debugging *****/
+		if (DEBUG) {
+			printf("Client IP-address = %s\n", inet_ntoa(client.sin_addr));
+			printf("Elements in queue = %lu\n", socketQ->size());
+			fflush(stdout);
+		}
+		/*************************/
 	}
 
-	// Handler
-	// Quit on CTRL-C
-	signal(SIGINT, termination_handler);
-
-	// Initialize variables
-	pthread_mutex_init(&count_mutex, NULL);
-	num_threads = MAX_THREADS;
-	socketQ = new queue<int> [QUEUE_SIZE];
-	sem_init(&job_queue_count, 0, 0);
-
-	// Set up connection and start sending/receiving
-	connect(argv);
-
-	// Deallocation
-	cleanup();
-
+	// Execution will never get here due to termination handler
 	return 0;
 }

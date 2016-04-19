@@ -21,13 +21,12 @@
 #include <iostream>
 #include <queue>
 #include <semaphore.h>
+#include <thread>
+#include <chrono>
 
-#define CONNECTION_INFO 1
 #define BUF_SIZE 1024
-#define SERVER 1
 #define SERVER_PORT 1
-#define CLIENT_PORT 2
-#define MAXCONN 10
+#define MAX_CONN 5
 #define MAX_THREADS 2
 #define QUEUE_SIZE 1000
 
@@ -36,18 +35,25 @@
 
 // Multithreading and thread safety
 pthread_mutex_t count_mutex;
-std::queue<int> socketQ;
+std::queue<int>* socketQ;
+std::queue<struct sockaddr_in>* clientQ;
 sem_t job_queue_count;
+unsigned int num_threads;
+int server_s;
+pthread_t consumer;
 
 /****************************/
 
 // Controls main loops
-int done = 0;
+unsigned int done = 0;
 
 // Custom error handling
 void error(const char *err) {
 	perror(err);
 	exit(EXIT_SUCCESS);
 }
+
+// Function definitions
+void cleanup();
 
 #endif /* P2_H_ */
