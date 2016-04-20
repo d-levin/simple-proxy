@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -27,22 +28,24 @@
 
 #define LISTEN_PORT		1
 #define MAX_CONN		5
-#define MAX_THREADS		1 // Set to 30
+#define MAX_THREADS		2 // Set to 30
+// Permissions are READ/WRITE for OWNER and READ for others
+#define SEM_PERMISSIONS	0644
 
 // Array sizes
 #define QUEUE_SIZE		10000
 #define MSG_BUF_SIZE	1000000
 
-// Comment out to disable debug messages
+// Set to 0 to disable debug messages
 #define DEBUG			1
 
 // Multithreading and thread safety
 pthread_mutex_t count_mutex;
-std::queue<int>* socketQ;
-sem_t job_queue_count;
+std::queue<int> socketQ;
+sem_t* job_queue_count;
+char SEM_NAME[] = "sem";
 int server_s;
-pthread_t* pool;
-int currPoolSize;
+pthread_t pool[MAX_THREADS];
 
 // Custom error handling
 void error(const char *err) {

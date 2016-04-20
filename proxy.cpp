@@ -18,6 +18,8 @@ void termination_handler(int signum) {
 	if (server_s > 0) {
 		close(server_s);
 	}
+	// Fake job to wake up consumers one last time
+	sem_post(job_queue_count);
 }
 
 // Send a message to given connection
@@ -35,75 +37,30 @@ void sendMsg(int s, int size, char *ptr) {
 	}
 }
 
-//void* runner(void* s) {
-//	// Send test message back to connected client via file descriptor
-//	int sock = *((int*) s);
-//	char buf[MSG_BUF_SIZE];
-//	sprintf(buf, "This is a message for fd = %d from thread = %d\n", sock,
-//			pthread_self());
-//	sendMsg(sock, MSG_BUF_SIZE, buf);
-//
-//	// When should socket be closed?
-//	//close(sock);
-//
-//	// Keep thread alive for testing
-//	sleep(10);
-//	printf("Thread awake\n");
-//	fflush(stdout);
-//
-//	pthread_exit(EXIT_SUCCESS);
-//	return 0;
-//}
+void* consume(void* data) {
+	pthread_t tid = *((pthread_t*) data);
 
-void* consume(void* t) {
 	while (!done) {
-		// Delay for testing
+		// Consumer waits for items to process
+		sem_wait(job_queue_count);
+
+		cout << "Thread " << tid << " awake!" << endl;
 		this_thread::sleep_for(chrono::seconds(5));
-
-		//Consumer waits for items to process
-		sem_wait(&job_queue_count);
-
-		cout << "Thread awake!" << endl;
 
 		// Process item
 		pthread_mutex_lock(&count_mutex);
-		if (socketQ->size() > 0) {
-			cout << "Socket in queue = " << socketQ->front() << endl;
+		if (!socketQ.empty()) {
+			int sock = socketQ.front();
+			socketQ.pop();
+			cout << "Consumed socket = " << sock << endl;
+//			// Send test message back to connected client via file descriptor
+//			char buf[MSG_BUF_SIZE];
+//			sprintf(buf, "This is a message for fd = %d\n", sock);
+//			sendMsg(sock, MSG_BUF_SIZE, buf);
+			//close(sock);
 		}
 		pthread_mutex_unlock(&count_mutex);
-
-//		if (socketQ->size() > 0) {
-//			int sock = socketQ->front();
-//			socketQ->pop();
-//			// Send test message back to connected client via file descriptor
-//			char buf[MSG_BUF_SIZE];
-//			sprintf(buf, "This is a message for fd = %d\n", sock);
-//			sendMsg(sock, MSG_BUF_SIZE, buf);
-//			close(sock);
-//		}
-
 	}
-
-//	printf("in consume\n");
-//	fflush(stdout);
-//	while (!done) {
-//		delay(2);
-//		// Consumer waits for items to process
-//		sem_wait(&job_queue_count);
-//
-//		// Process item
-//		pthread_mutex_lock(&count_mutex);
-//		if (socketQ->size() > 0) {
-//			int sock = socketQ->front();
-//			socketQ->pop();
-//			// Send test message back to connected client via file descriptor
-//			char buf[MSG_BUF_SIZE];
-//			sprintf(buf, "This is a message for fd = %d\n", sock);
-//			sendMsg(sock, MSG_BUF_SIZE, buf);
-//			close(sock);
-//		}
-//		pthread_mutex_unlock(&count_mutex);
-//	}
 
 	pthread_exit(EXIT_SUCCESS);
 	return 0;
@@ -111,9 +68,10 @@ void* consume(void* t) {
 
 void cleanup() {
 	pthread_mutex_destroy(&count_mutex);
-	sem_destroy(&job_queue_count);
-	delete[] socketQ;
-	delete[] pool;
+	// sem_destroy is deprecated on OSX
+	//sem_destroy(job_queue_count);
+	sem_close(job_queue_count);
+	sem_unlink(SEM_NAME);
 }
 
 int main(int argc, char *argv[]) {
@@ -125,14 +83,22 @@ int main(int argc, char *argv[]) {
 	// Exit Handler
 	// Quit on CTRL-C
 	signal(SIGINT, termination_handler);
-	cout << "trying" << endl;
 
 	// Synchronization
 	pthread_mutex_init(&count_mutex, NULL);
-	sem_init(&job_queue_count, 0, 0);
 
-	// Thread pool
-	pool = new pthread_t[MAX_THREADS];
+	// sem_init is deprecated on OSX
+//	if ((sem_init(job_queue_count, 0, 0)) < 0) {
+//		error("Could not initiate semaphore");
+//	}
+	// Alternative sem init
+	// Source:
+	// http://www.linuxdevcenter.com/pub/a/linux/2007/05/24/semaphores-in-linux.html?page=5
+	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
+	if (job_queue_count == SEM_FAILED) {
+		sem_unlink(SEM_NAME);
+		error("Unable to create semaphore");
+	}
 
 	// Set up server to listen for incoming connections
 	struct sockaddr_in server;
@@ -170,18 +136,12 @@ int main(int argc, char *argv[]) {
 			error("Could not create consumer thread");
 		}
 	}
-	cout << "threads created" << endl;
-
-	// Queue stores client connections
-	// Number of connections limited to QUEUE_SIZE
-	socketQ = new queue<int> [QUEUE_SIZE];
 
 	// Start producing
 	struct sockaddr_in client;
-	socklen_t csize;
+	memset(&client, 0, sizeof(client));
+	socklen_t csize = sizeof(client);
 	while (!done) {
-		memset(&client, 0, sizeof(client));
-		csize = sizeof(client);
 		// Accept client connection
 		int client_s = accept(server_s, (struct sockaddr*) &client, &csize);
 
@@ -193,19 +153,13 @@ int main(int argc, char *argv[]) {
 		// Add to queue
 		pthread_mutex_lock(&count_mutex);
 		// The number of sockets in the queue are limited to QUEUE_SIZE
-		if (socketQ->size() < QUEUE_SIZE) {
-			socketQ->push(client_s);
-			sem_post(&job_queue_count);
-		} else {
-			error("Socket queue full");
-		}
+		socketQ.push(client_s);
 		pthread_mutex_unlock(&count_mutex);
+		sem_post(job_queue_count);
 	}
 
 	// Wait for consumers to finish
 	for (int i = 0; i < MAX_THREADS; i++) {
-//		printf("Joining thread %d\n", i);
-//		fflush(stdout);
 		pthread_join(pool[i], NULL);
 	}
 
