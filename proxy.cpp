@@ -14,7 +14,9 @@ void termination_handler(int signum) {
 	done = 1;
 	close(server_s);
 	// Fake job to wake up consumers one last time
-	sem_post(job_queue_count);
+	for (int i = 0; i < MAX_THREADS; i++) {
+		sem_post(job_queue_count);
+	}
 }
 
 // Receive a message to a given socket file descriptor
