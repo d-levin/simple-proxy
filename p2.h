@@ -23,27 +23,26 @@
 #include <semaphore.h>
 #include <thread>
 #include <chrono>
+#include <arpa/inet.h>
 
-#define LISTEN_PORT 1
-#define MAX_CONN 5
-#define MAX_THREADS 1 // Set to 30
+#define LISTEN_PORT		1
+#define MAX_CONN		5
+#define MAX_THREADS		1 // Set to 30
 
 // Array sizes
-#define QUEUE_SIZE 10000
-#define MSG_BUF_SIZE 1000000
+#define QUEUE_SIZE		10000
+#define MSG_BUF_SIZE	1000000
 
 // Comment out to disable debug messages
-#define DEBUG
+#define DEBUG			1
 
 // Multithreading and thread safety
 pthread_mutex_t count_mutex;
 std::queue<int>* socketQ;
 sem_t job_queue_count;
-static int server_s;
-pthread_t consumer;
-
-// Controls termination of program
-static volatile bool done = 0;
+int server_s;
+pthread_t* pool;
+int currPoolSize;
 
 // Custom error handling
 void error(const char *err) {

@@ -4,15 +4,11 @@
  *      Author: Dennis Levin
  */
 
-#include <arpa/inet.h>
 #include "p2.h"
 using namespace std;
 
-#ifdef DEBUG
-void delay(unsigned int sec) {
-	this_thread::sleep_for(chrono::seconds(sec));
-}
-#endif
+// Controls termination of program
+static volatile bool done = 0;
 
 // Handles CTRL-C signals
 void termination_handler(int signum) {
@@ -60,30 +56,54 @@ void sendMsg(int s, int size, char *ptr) {
 //}
 
 void* consume(void* t) {
-#ifdef DEBUG
-	int tid = *((int*) t);
-	printf("I am thread = %d\n", tid);
-	fflush(stdout);
-#endif
-
 	while (!done) {
-		delay(2);
-		printf("I am thread\n");
-		fflush(stdout);
+		// Delay for testing
+		this_thread::sleep_for(chrono::seconds(5));
+
+		//Consumer waits for items to process
+		sem_wait(&job_queue_count);
+
+		cout << "Thread awake!" << endl;
+
+		// Process item
+		pthread_mutex_lock(&count_mutex);
+		if (socketQ->size() > 0) {
+			cout << "Socket in queue = " << socketQ->front() << endl;
+		}
+		pthread_mutex_unlock(&count_mutex);
+
+//		if (socketQ->size() > 0) {
+//			int sock = socketQ->front();
+//			socketQ->pop();
+//			// Send test message back to connected client via file descriptor
+//			char buf[MSG_BUF_SIZE];
+//			sprintf(buf, "This is a message for fd = %d\n", sock);
+//			sendMsg(sock, MSG_BUF_SIZE, buf);
+//			close(sock);
+//		}
+
+	}
+
+//	printf("in consume\n");
+//	fflush(stdout);
+//	while (!done) {
+//		delay(2);
 //		// Consumer waits for items to process
 //		sem_wait(&job_queue_count);
 //
+//		// Process item
 //		pthread_mutex_lock(&count_mutex);
 //		if (socketQ->size() > 0) {
 //			int sock = socketQ->front();
 //			socketQ->pop();
+//			// Send test message back to connected client via file descriptor
+//			char buf[MSG_BUF_SIZE];
+//			sprintf(buf, "This is a message for fd = %d\n", sock);
+//			sendMsg(sock, MSG_BUF_SIZE, buf);
 //			close(sock);
-//#ifdef DEBUG
-//			printf("Thread id %lu consumed socket %d\n", tid, sock);
-//#endif
 //		}
 //		pthread_mutex_unlock(&count_mutex);
-	}
+//	}
 
 	pthread_exit(EXIT_SUCCESS);
 	return 0;
@@ -93,6 +113,7 @@ void cleanup() {
 	pthread_mutex_destroy(&count_mutex);
 	sem_destroy(&job_queue_count);
 	delete[] socketQ;
+	delete[] pool;
 }
 
 int main(int argc, char *argv[]) {
@@ -104,24 +125,14 @@ int main(int argc, char *argv[]) {
 	// Exit Handler
 	// Quit on CTRL-C
 	signal(SIGINT, termination_handler);
+	cout << "trying" << endl;
 
 	// Synchronization
 	pthread_mutex_init(&count_mutex, NULL);
 	sem_init(&job_queue_count, 0, 0);
 
 	// Thread pool
-	pthread_t pool[MAX_THREADS];
-
-	// Start consumer threads
-	for (int i = 0; i < MAX_THREADS; i++) {
-#ifdef DEBUG
-		printf("Creating thread %d\n", i);
-		fflush(stdout);
-#endif
-		if (pthread_create(&pool[i], NULL, consume, NULL) < 0) {
-			error("Could not create consumer thread");
-		}
-	}
+	pool = new pthread_t[MAX_THREADS];
 
 	// Set up server to listen for incoming connections
 	struct sockaddr_in server;
@@ -153,15 +164,24 @@ int main(int argc, char *argv[]) {
 		error("Failed to listen");
 	}
 
+	// Start consumer threads
+	for (int i = 0; i < MAX_THREADS; i++) {
+		if (pthread_create(&pool[i], NULL, consume, &pool[i]) < 0) {
+			error("Could not create consumer thread");
+		}
+	}
+	cout << "threads created" << endl;
+
 	// Queue stores client connections
 	// Number of connections limited to QUEUE_SIZE
 	socketQ = new queue<int> [QUEUE_SIZE];
 
 	// Start producing
 	struct sockaddr_in client;
-	memset(&client, 0, sizeof(client));
-	socklen_t csize = sizeof(client);
+	socklen_t csize;
 	while (!done) {
+		memset(&client, 0, sizeof(client));
+		csize = sizeof(client);
 		// Accept client connection
 		int client_s = accept(server_s, (struct sockaddr*) &client, &csize);
 
@@ -180,19 +200,12 @@ int main(int argc, char *argv[]) {
 			error("Socket queue full");
 		}
 		pthread_mutex_unlock(&count_mutex);
-
-#ifdef DEBUG
-		printf("Client IP-address = %s\n", inet_ntoa(client.sin_addr));
-		printf("Elements in queue = %lu\n", socketQ->size());
-		fflush(stdout);
-#endif
-
 	}
 
 	// Wait for consumers to finish
 	for (int i = 0; i < MAX_THREADS; i++) {
-		printf("Joining thread %d\n", i);
-		fflush(stdout);
+//		printf("Joining thread %d\n", i);
+//		fflush(stdout);
 		pthread_join(pool[i], NULL);
 	}
 
