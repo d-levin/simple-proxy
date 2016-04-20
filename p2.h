@@ -29,13 +29,14 @@
 
 #define LISTEN_PORT		1
 #define MAX_CONN		5
-#define MAX_THREADS		2 // Set to 30
+#define MAX_THREADS		5 // Set to 30
 // Permissions are READ/WRITE for OWNER and READ for others
 #define SEM_PERMISSIONS	0644
+#define CRLF "\r\n"
 
 // Array sizes
 #define QUEUE_SIZE		10000
-#define MSG_BUF_SIZE	1000000
+#define MSG_BUF_SIZE	1000000 // Set to 1MB = 1000000 bytes
 
 // Set to 0 to disable debug messages
 #define DEBUG			1

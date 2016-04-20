@@ -9,14 +9,42 @@ using namespace std;
 
 // Handles CTRL-C signals
 void termination_handler(int signum) {
-	printf("\nTerminating proxy...\n");
+	cout << endl << "Terminating proxy..." << endl;
 	fflush(stdout);
 	done = 1;
-	if (server_s > 0) {
-		close(server_s);
-	}
+	close(server_s);
 	// Fake job to wake up consumers one last time
 	sem_post(job_queue_count);
+}
+
+// Receive a message to a given socket file descriptor
+void receiveMsg(int s, int size, char *ptr) {
+	int received = 0;
+	// First time we enter the ptr points to start of buffer
+	char* buf = ptr;
+	// Subtract 1 to avoid completely filling buffer
+	// Leave space for '\0'
+	while ((size > 0) && (received = read(s, ptr, size - 1))) {
+		// Check error
+		if (received < 0 && !done) {
+			error("Read failed");
+		}
+
+		if (received == 0) {
+			cout << "Client closed connection" << endl;
+		}
+
+		// Move pointer forward in struct by size of received data
+		ptr += received;
+
+		// Keep track of how much data has been received
+		size -= received;
+
+		// Exit loop if CRLF CRLF has been received
+		if (strstr(buf, CRLF CRLF)) {
+			break;
+		}
+	}
 }
 
 // Send a message to a given socket file descriptor
@@ -35,7 +63,7 @@ void sendMsg(int s, int size, char *ptr) {
 		size -= sent;
 	}
 	if (DEBUG) {
-		printf("Message sent to fd = %d\n", s);
+		cout << "Message sent to fd = " << s << endl;
 	}
 }
 
@@ -52,24 +80,73 @@ void* consume(void* data) {
 		if (!socketQ.empty()) {
 			sock = socketQ.front();
 			socketQ.pop();
-			if (sock >= 0 && DEBUG) {
-				cout << "Consumed socket = " << sock << endl;
+
+			if (DEBUG) {
+				cout << "Thread id = " << tid << " consumed socket = " << sock
+						<< endl;
 			}
 		}
 		pthread_mutex_unlock(&count_mutex);
 
-		// Send message to connected client
-		if (sock >= 0) {
-			// Send test message back to connected client via file descriptor
-			// MSG_BUF_SIZE too large for stack
+		// Don't allocate buffer on stack
+		// Receive message from client
+		if (!done) {
 			char* buf = new char[MSG_BUF_SIZE];
 			memset(buf, 0, MSG_BUF_SIZE);
-			sprintf(buf, "This is a message for fd = %d from thread %li\n",
-					sock, (unsigned long int) tid);
-			sendMsg(sock, MSG_BUF_SIZE, buf);
-			this_thread::sleep_for(chrono::seconds(5));
-			//close(sock);
+			receiveMsg(sock, MSG_BUF_SIZE, buf);
+			printf("Received message = %s\n", buf);
+			fflush(stdout);
+
+			/*********************************************/
+			// Setup connection to webserver
+			// Create struct and zero out
+			struct sockaddr_in sa;
+			memset(&sa, 0, sizeof(sa));
+
+			// Check host name
+			char hname[] = "http://www.yahoo.com";
+			struct hostent *host = gethostbyname(hname);
+			if (!host) {
+				error("Could not resolve host name");
+			}
+
+			// Copy host name to struct
+			memcpy(&sa.sin_addr.s_addr, host->h_addr_list[0], host->h_length);
+
+			// Set struct properties
+			int port = atoi("80");
+			sa.sin_family = AF_INET;
+			sa.sin_port = htons(port);
+
+			// Open socket
+			int web_s = socket(AF_INET, SOCK_STREAM, 0);
+
+			// Socket failed
+			if (web_s < 0) {
+				error("Failed to open socket");
+			}
+
+			// Connect to host
+			if (connect(web_s, (struct sockaddr*) &sa, sizeof(sa)) < 0) {
+				error("Connection failed");
+			} else {
+				cout << "Connected to " << hname << endl;
+			}
+			/*********************************************/
+
+			// Cleanup
+			delete[] buf;
+			close(sock);
 		}
+
+//		// Send test message back to connected client via file descriptor
+//		memset(buf, 0, MSG_BUF_SIZE);
+//		sprintf(buf, "This is a message for fd = %d from thread %li\n", sock,
+//				(unsigned long int) tid);
+//		sendMsg(sock, MSG_BUF_SIZE, buf);
+
+		//this_thread::sleep_for(chrono::seconds(5));
+
 	}
 
 	pthread_exit(EXIT_SUCCESS);
@@ -101,6 +178,8 @@ int main(int argc, char *argv[]) {
 	// Alternative to sem_init (deprecated on OSX)
 	// Source:
 	// http://www.linuxdevcenter.com/pub/a/linux/2007/05/24/semaphores-in-linux.html?page=5
+	// Clear semaphore first
+	sem_unlink(SEM_NAME);
 	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
 	if (job_queue_count == SEM_FAILED) {
 		sem_unlink(SEM_NAME);
@@ -132,7 +211,7 @@ int main(int argc, char *argv[]) {
 
 	// Wait for connections
 	// Accepting up to MAX_CONN pending connections
-	printf("Listening on port %d...\n", port);
+	cout << "Listening on port " << port << "..." << endl;
 	if (listen(server_s, MAX_CONN) < 0) {
 		error("Failed to listen");
 	}
@@ -159,11 +238,19 @@ int main(int argc, char *argv[]) {
 			error("Failed to accept");
 		}
 
+		if (DEBUG) {
+			if (!done) {
+				cout << "Client (IP: " << inet_ntoa(client.sin_addr)
+						<< ") connected at fd = " << client_s << endl;
+			}
+		}
+
 		// Add to queue
 		pthread_mutex_lock(&count_mutex);
 		// The number of sockets in the queue are limited to QUEUE_SIZE
 		socketQ.push(client_s);
 		pthread_mutex_unlock(&count_mutex);
+		// Ready for consumption
 		sem_post(job_queue_count);
 	}
 
