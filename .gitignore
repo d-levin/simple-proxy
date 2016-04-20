@@ -1,8 +1,10 @@
 # Ignore all
 *
+.*
 
 # Except
 !proxy.cpp
 !p2.h
 !Makefile
 !readme.txt
+!.gitignore
