@@ -106,7 +106,7 @@ void* consume(void* data) {
 			memset(&sa, 0, sizeof(sa));
 
 			// Check host name
-			char hname[] = "http://www.yahoo.com";
+			const char* hname = "www.yahoo.com";
 			struct hostent *host = gethostbyname(hname);
 			if (!host) {
 				error("Could not resolve host name");
@@ -131,13 +131,29 @@ void* consume(void* data) {
 			// Connect to host
 			if (connect(web_s, (struct sockaddr*) &sa, sizeof(sa)) < 0) {
 				error("Connection failed");
-			} else {
-				cout << "Connected to " << hname << endl;
+			} else if (DEBUG) {
+				cout << "Connected to: ";
+				printf("%s\n", host->h_name);
+				fflush(stdout);
 			}
+
+			// Send hardcoded GET
+			char* requestBuf = "GET / HTTP/1.0\r\n\r\n";
+			sendMsg(web_s, strlen(requestBuf), requestBuf);
+
+			// Receive response from webserver
+			char* responseBuf = new char[MSG_BUF_SIZE];
+			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf);
+
+			// Send response back to client
+			sendMsg(sock, MSG_BUF_SIZE, responseBuf);
 			/*********************************************/
 
 			// Cleanup
 			delete[] buf;
+			delete[] requestBuf;
+			delete[] responseBuf;
+			close(web_s);
 			close(sock);
 		}
 
@@ -158,8 +174,9 @@ void* consume(void* data) {
 void cleanup() {
 	pthread_mutex_destroy(&count_mutex);
 	// Alternative to sem_destroy (deprecated on OSX)
-	sem_close(job_queue_count);
-	sem_unlink(SEM_NAME);
+//	sem_close(job_queue_count);
+//	sem_unlink(SEM_NAME);
+	sem_destroy(job_queue_count);
 }
 
 int main(int argc, char *argv[]) {
@@ -181,10 +198,13 @@ int main(int argc, char *argv[]) {
 	// Source:
 	// http://www.linuxdevcenter.com/pub/a/linux/2007/05/24/semaphores-in-linux.html?page=5
 	// Clear semaphore first
-	sem_unlink(SEM_NAME);
-	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
+//	sem_unlink(SEM_NAME);
+//	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
+	// For testing on cs2
+	job_queue_count = new sem_t;
+	sem_init(job_queue_count, 0, 0);
 	if (job_queue_count == SEM_FAILED) {
-		sem_unlink(SEM_NAME);
+		//sem_unlink(SEM_NAME);
 		error("Unable to create semaphore");
 	}
 

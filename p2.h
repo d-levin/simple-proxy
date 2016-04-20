@@ -23,16 +23,18 @@
 #include <iostream>
 #include <queue>
 #include <semaphore.h>
-#include <thread>
-#include <chrono>
 #include <arpa/inet.h>
+
+// For built in thread delay
+//#include <thread>
+//#include <chrono>
 
 #define LISTEN_PORT		1
 #define MAX_CONN		5
 #define MAX_THREADS		5 // Set to 30
+#define CRLF "\r\n"
 // Permissions are READ/WRITE for OWNER and READ for others
 #define SEM_PERMISSIONS	0644
-#define CRLF "\r\n"
 
 // Array sizes
 #define QUEUE_SIZE		10000
