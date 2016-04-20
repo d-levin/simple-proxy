@@ -7,12 +7,9 @@
 #include "p2.h"
 using namespace std;
 
-// Controls termination of program
-static volatile bool done = 0;
-
 // Handles CTRL-C signals
 void termination_handler(int signum) {
-	printf("\nTerminating program.\n");
+	printf("\nTerminating proxy...\n");
 	fflush(stdout);
 	done = 1;
 	if (server_s > 0) {
@@ -22,7 +19,7 @@ void termination_handler(int signum) {
 	sem_post(job_queue_count);
 }
 
-// Send a message to given connection
+// Send a message to a given socket file descriptor
 void sendMsg(int s, int size, char *ptr) {
 	int sent = 0;
 	while ((size > 0) && (sent = write(s, ptr, size))) {
@@ -30,10 +27,15 @@ void sendMsg(int s, int size, char *ptr) {
 		if (sent < 0) {
 			error("Write failed");
 		}
+
 		// Move pointer forward in struct by size of sent data
 		ptr += sent;
+
 		// Keep track of how much data has been sent
 		size -= sent;
+	}
+	if (DEBUG) {
+		printf("Message sent to fd = %d\n", s);
 	}
 }
 
@@ -44,22 +46,30 @@ void* consume(void* data) {
 		// Consumer waits for items to process
 		sem_wait(job_queue_count);
 
-		cout << "Thread " << tid << " awake!" << endl;
-		this_thread::sleep_for(chrono::seconds(5));
-
 		// Process item
+		int sock = -1;
 		pthread_mutex_lock(&count_mutex);
 		if (!socketQ.empty()) {
-			int sock = socketQ.front();
+			sock = socketQ.front();
 			socketQ.pop();
-			cout << "Consumed socket = " << sock << endl;
-//			// Send test message back to connected client via file descriptor
-//			char buf[MSG_BUF_SIZE];
-//			sprintf(buf, "This is a message for fd = %d\n", sock);
-//			sendMsg(sock, MSG_BUF_SIZE, buf);
-			//close(sock);
+			if (sock >= 0 && DEBUG) {
+				cout << "Consumed socket = " << sock << endl;
+			}
 		}
 		pthread_mutex_unlock(&count_mutex);
+
+		// Send message to connected client
+		if (sock >= 0) {
+			// Send test message back to connected client via file descriptor
+			// MSG_BUF_SIZE too large for stack
+			char* buf = new char[MSG_BUF_SIZE];
+			memset(buf, 0, MSG_BUF_SIZE);
+			sprintf(buf, "This is a message for fd = %d from thread %li\n",
+					sock, (unsigned long int) tid);
+			sendMsg(sock, MSG_BUF_SIZE, buf);
+			this_thread::sleep_for(chrono::seconds(5));
+			//close(sock);
+		}
 	}
 
 	pthread_exit(EXIT_SUCCESS);
@@ -68,8 +78,7 @@ void* consume(void* data) {
 
 void cleanup() {
 	pthread_mutex_destroy(&count_mutex);
-	// sem_destroy is deprecated on OSX
-	//sem_destroy(job_queue_count);
+	// Alternative to sem_destroy (deprecated on OSX)
 	sem_close(job_queue_count);
 	sem_unlink(SEM_NAME);
 }
@@ -85,13 +94,11 @@ int main(int argc, char *argv[]) {
 	signal(SIGINT, termination_handler);
 
 	// Synchronization
-	pthread_mutex_init(&count_mutex, NULL);
+	if (pthread_mutex_init(&count_mutex, NULL) != 0) {
+		error("mutex failed");
+	}
 
-	// sem_init is deprecated on OSX
-//	if ((sem_init(job_queue_count, 0, 0)) < 0) {
-//		error("Could not initiate semaphore");
-//	}
-	// Alternative sem init
+	// Alternative to sem_init (deprecated on OSX)
 	// Source:
 	// http://www.linuxdevcenter.com/pub/a/linux/2007/05/24/semaphores-in-linux.html?page=5
 	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
@@ -134,6 +141,8 @@ int main(int argc, char *argv[]) {
 	for (int i = 0; i < MAX_THREADS; i++) {
 		if (pthread_create(&pool[i], NULL, consume, &pool[i]) < 0) {
 			error("Could not create consumer thread");
+		} else if (DEBUG) {
+			cout << "Spawned thread id = " << pool[i] << endl;
 		}
 	}
 
@@ -160,6 +169,9 @@ int main(int argc, char *argv[]) {
 
 	// Wait for consumers to finish
 	for (int i = 0; i < MAX_THREADS; i++) {
+		if (DEBUG) {
+			cout << "Joining thread " << i << endl;
+		}
 		pthread_join(pool[i], NULL);
 	}
 

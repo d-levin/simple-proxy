@@ -18,6 +18,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <iostream>
 #include <queue>
@@ -41,11 +42,14 @@
 
 // Multithreading and thread safety
 pthread_mutex_t count_mutex;
-std::queue<int> socketQ;
 sem_t* job_queue_count;
 char SEM_NAME[] = "sem";
 int server_s;
+std::queue<int> socketQ;
 pthread_t pool[MAX_THREADS];
+
+// Controls termination of program
+static volatile bool done = 0;
 
 // Custom error handling
 void error(const char *err) {
