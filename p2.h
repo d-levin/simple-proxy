@@ -31,25 +31,24 @@
 
 #define LISTEN_PORT		1
 #define MAX_CONN		5
-#define MAX_THREADS		5 // Set to 30
+#define MAX_THREADS		1 // Set to 30
 #define CRLF "\r\n"
 // Permissions are READ/WRITE for OWNER and READ for others
 #define SEM_PERMISSIONS	0644
 
 // Array sizes
-#define QUEUE_SIZE		10000
 #define MSG_BUF_SIZE	1000000 // Set to 1MB = 1000000 bytes
 
 // Set to 0 to disable debug messages
 #define DEBUG			1
 
 // Multithreading and thread safety
-pthread_mutex_t count_mutex;
+pthread_mutex_t* count_mutex;
 sem_t* job_queue_count;
 char SEM_NAME[] = "sem";
 int server_s;
-std::queue<int> socketQ;
-pthread_t pool[MAX_THREADS];
+std::queue<int>* socketQ;
+pthread_t* pool;
 
 // Controls termination of program
 static volatile bool done = 0;
@@ -57,7 +56,7 @@ static volatile bool done = 0;
 // Custom error handling
 void error(const char *err) {
 	perror(err);
-	exit(EXIT_SUCCESS);
+	exit(EXIT_FAILURE);
 }
 
 // Function definitions

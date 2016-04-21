@@ -19,6 +19,11 @@ void termination_handler(int signum) {
 	}
 }
 
+// Catch SIGPIPE error
+void signal_callback_handler(int signum) {
+	printf("Caught signal SIGPIPE %d\n", signum);
+}
+
 // Receive a message to a given socket file descriptor
 void receiveMsg(int s, int size, char *ptr) {
 	int received = 0;
@@ -54,6 +59,7 @@ void sendMsg(int s, int size, char *ptr) {
 	while ((size > 0) && (sent = write(s, ptr, size))) {
 		// Check error
 		if (sent < 0) {
+			break;
 			error("Write failed");
 		}
 
@@ -77,23 +83,23 @@ void* consume(void* data) {
 
 		// Process item
 		int sock = -1;
-		pthread_mutex_lock(&count_mutex);
-		if (!socketQ.empty()) {
-			sock = socketQ.front();
-			socketQ.pop();
+		pthread_mutex_lock(count_mutex);
+		if (!socketQ->empty()) {
+			sock = socketQ->front();
+			socketQ->pop();
 
 			if (DEBUG) {
 				cout << "Thread id = " << tid << " consumed socket = " << sock
 						<< endl;
 			}
 		}
-		pthread_mutex_unlock(&count_mutex);
+		pthread_mutex_unlock(count_mutex);
 
 		// Don't allocate buffer on stack
 		// Receive message from client
 		if (!done && sock >= 0) {
 			char* buf = new char[MSG_BUF_SIZE];
-			memset(buf, 0, MSG_BUF_SIZE);
+			memset(buf, '\0', MSG_BUF_SIZE);
 			receiveMsg(sock, MSG_BUF_SIZE, buf);
 			printf("Received message = %s\n", buf);
 			fflush(stdout);
@@ -105,7 +111,7 @@ void* consume(void* data) {
 			memset(&sa, 0, sizeof(sa));
 
 			// Check host name
-			const char* hname = "www.dlevin.io";
+			const char* hname = "www.yahoo.com";
 			struct hostent *host = gethostbyname(hname);
 			if (!host) {
 				error("Could not resolve host name");
@@ -138,27 +144,39 @@ void* consume(void* data) {
 
 			// Send hardcoded GET
 			char requestBuf[] =
-					"GET /index.html HTTP/1.0\r\nHost: www.dlevin.io\r\nConnection: close\r\n\r\n";
+					"GET /index.html HTTP/1.0\r\nConnection: close\r\n\r\n";
 			sendMsg(web_s, strlen(requestBuf), requestBuf);
 
 			// Receive response from webserver
 			char* responseBuf = new char[MSG_BUF_SIZE];
-			memset(responseBuf, 0, MSG_BUF_SIZE);
+			memset(responseBuf, '\0', MSG_BUF_SIZE);
 			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf);
-			printf("%s\n", responseBuf);
-			fflush(stdout);
+
+			if (DEBUG) {
+				printf("%s\n", responseBuf);
+				fflush(stdout);
+			}
+
+			// Done with webserver
+			close(web_s);
 
 			// Send response back to client
+			if (DEBUG) {
+				cout << "Sending back to client (browser)" << endl;
+			}
 			sendMsg(sock, MSG_BUF_SIZE, responseBuf);
+			cout << "Message sent successfully to client" << endl;
 
-			// does the browser socket need to be opened again?
-			/*********************************************/
+			// Not getting full data from Google because
+			//		a. Hardcoded GET request; browser doesn't ask for missing elements
+			//		b. Ending receive by checking wrong char combo (CNLFCNLF)
 
 			// Cleanup
 			delete[] buf;
 			delete[] responseBuf;
-			close(web_s);
-			close(sock);
+			if (sock >= 0) {
+				close(sock);
+			}
 		}
 	}
 
@@ -167,13 +185,18 @@ void* consume(void* data) {
 }
 
 void cleanup() {
-	pthread_mutex_destroy(&count_mutex);
+	pthread_mutex_destroy(count_mutex);
 	// Alternative to sem_destroy (deprecated on OSX)
 //	sem_close(job_queue_count);
 //	sem_unlink(SEM_NAME);
 	if (sem_destroy(job_queue_count) < 0) {
 		error("Destroy semaphore failed");
 	}
+	while (!socketQ->empty()) {
+		socketQ->pop();
+	}
+	delete socketQ;
+	delete[] pool;
 }
 
 int main(int argc, char *argv[]) {
@@ -182,12 +205,13 @@ int main(int argc, char *argv[]) {
 		error("usage: ./proxy <port>\n");
 	}
 
-	// Exit Handler
-	// Quit on CTRL-C
+	// Signal handlers
 	signal(SIGINT, termination_handler);
+	signal(SIGPIPE, signal_callback_handler);
 
 	// Synchronization
-	if (pthread_mutex_init(&count_mutex, NULL) != 0) {
+	count_mutex = new pthread_mutex_t;
+	if (pthread_mutex_init(count_mutex, NULL) != 0) {
 		error("mutex failed");
 	}
 
@@ -235,6 +259,9 @@ int main(int argc, char *argv[]) {
 		error("Failed to listen");
 	}
 
+	// Thread pool
+	pool = new pthread_t[MAX_THREADS];
+
 	// Start consumer threads
 	for (int i = 0; i < MAX_THREADS; i++) {
 		if (pthread_create(&pool[i], NULL, consume, &pool[i]) < 0) {
@@ -243,6 +270,9 @@ int main(int argc, char *argv[]) {
 			cout << "Spawned thread id = " << pool[i] << endl;
 		}
 	}
+
+	// Queue for client connections
+	socketQ = new queue<int>();
 
 	// Start producing
 	struct sockaddr_in client;
@@ -265,10 +295,10 @@ int main(int argc, char *argv[]) {
 		}
 
 		// Add to queue
-		pthread_mutex_lock(&count_mutex);
+		pthread_mutex_lock(count_mutex);
 		// The number of sockets in the queue are limited to QUEUE_SIZE
-		socketQ.push(client_s);
-		pthread_mutex_unlock(&count_mutex);
+		socketQ->push(client_s);
+		pthread_mutex_unlock(count_mutex);
 		// Ready for consumption
 		sem_post(job_queue_count);
 	}
