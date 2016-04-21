@@ -32,10 +32,6 @@ void receiveMsg(int s, int size, char *ptr) {
 			error("Read failed");
 		}
 
-		if (received == 0) {
-			cout << "Client closed connection" << endl;
-		}
-
 		// Move pointer forward in struct by size of received data
 		ptr += received;
 
@@ -46,6 +42,9 @@ void receiveMsg(int s, int size, char *ptr) {
 		if (strstr(buf, CRLF CRLF)) {
 			break;
 		}
+	}
+	if (DEBUG) {
+		cout << "Message received from fd = " << s << endl;
 	}
 }
 
@@ -92,7 +91,7 @@ void* consume(void* data) {
 
 		// Don't allocate buffer on stack
 		// Receive message from client
-		if (!done) {
+		if (!done && sock >= 0) {
 			char* buf = new char[MSG_BUF_SIZE];
 			memset(buf, 0, MSG_BUF_SIZE);
 			receiveMsg(sock, MSG_BUF_SIZE, buf);
@@ -106,7 +105,7 @@ void* consume(void* data) {
 			memset(&sa, 0, sizeof(sa));
 
 			// Check host name
-			const char* hname = "www.yahoo.com";
+			const char* hname = "www.dlevin.io";
 			struct hostent *host = gethostbyname(hname);
 			if (!host) {
 				error("Could not resolve host name");
@@ -138,33 +137,29 @@ void* consume(void* data) {
 			}
 
 			// Send hardcoded GET
-			char* requestBuf = "GET / HTTP/1.0\r\n\r\n";
+			char requestBuf[] =
+					"GET /index.html HTTP/1.0\r\nHost: www.dlevin.io\r\nConnection: close\r\n\r\n";
 			sendMsg(web_s, strlen(requestBuf), requestBuf);
 
 			// Receive response from webserver
 			char* responseBuf = new char[MSG_BUF_SIZE];
+			memset(responseBuf, 0, MSG_BUF_SIZE);
 			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf);
+			printf("%s\n", responseBuf);
+			fflush(stdout);
 
 			// Send response back to client
 			sendMsg(sock, MSG_BUF_SIZE, responseBuf);
+
+			// does the browser socket need to be opened again?
 			/*********************************************/
 
 			// Cleanup
 			delete[] buf;
-			delete[] requestBuf;
 			delete[] responseBuf;
 			close(web_s);
 			close(sock);
 		}
-
-//		// Send test message back to connected client via file descriptor
-//		memset(buf, 0, MSG_BUF_SIZE);
-//		sprintf(buf, "This is a message for fd = %d from thread %li\n", sock,
-//				(unsigned long int) tid);
-//		sendMsg(sock, MSG_BUF_SIZE, buf);
-
-		//this_thread::sleep_for(chrono::seconds(5));
-
 	}
 
 	pthread_exit(EXIT_SUCCESS);
@@ -176,7 +171,9 @@ void cleanup() {
 	// Alternative to sem_destroy (deprecated on OSX)
 //	sem_close(job_queue_count);
 //	sem_unlink(SEM_NAME);
-	sem_destroy(job_queue_count);
+	if (sem_destroy(job_queue_count) < 0) {
+		error("Destroy semaphore failed");
+	}
 }
 
 int main(int argc, char *argv[]) {
