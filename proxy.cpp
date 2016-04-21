@@ -21,7 +21,9 @@ void termination_handler(int signum) {
 
 // Catch SIGPIPE error
 void signal_callback_handler(int signum) {
-	printf("Caught signal SIGPIPE %d\n", signum);
+	if (DEBUG) {
+		printf("Caught signal SIGPIPE %d\n", signum);
+	}
 }
 
 // Receive a message to a given socket file descriptor
@@ -101,8 +103,11 @@ void* consume(void* data) {
 			char* buf = new char[MSG_BUF_SIZE];
 			memset(buf, '\0', MSG_BUF_SIZE);
 			receiveMsg(sock, MSG_BUF_SIZE, buf);
-			printf("Received message = %s\n", buf);
-			fflush(stdout);
+
+			if (DEBUG) {
+				printf("Received message:\n%s\n", buf);
+				fflush(stdout);
+			}
 
 			/*********************************************/
 			// Setup connection to webserver
@@ -165,7 +170,10 @@ void* consume(void* data) {
 				cout << "Sending back to client (browser)" << endl;
 			}
 			sendMsg(sock, MSG_BUF_SIZE, responseBuf);
-			cout << "Message sent successfully to client" << endl;
+
+			if (DEBUG) {
+				cout << "Message sent successfully to client" << endl;
+			}
 
 			// Not getting full data from Google because
 			//		a. Hardcoded GET request; browser doesn't ask for missing elements

@@ -31,7 +31,7 @@
 
 #define LISTEN_PORT		1
 #define MAX_CONN		5
-#define MAX_THREADS		1 // Set to 30
+#define MAX_THREADS		30 // Set to 30
 #define CRLF "\r\n"
 // Permissions are READ/WRITE for OWNER and READ for others
 #define SEM_PERMISSIONS	0644
