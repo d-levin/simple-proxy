@@ -93,10 +93,10 @@ void* consume(void* data) {
 			sock = socketQ->front();
 			socketQ->pop();
 
-			if (DEBUG) {
-				std::cout << "Thread id = " << tid << " consumed socket = "
-						<< sock << std::endl;
-			}
+//			if (DEBUG) {
+//				std::cout << "Thread id = " << tid << " consumed socket = "
+//						<< sock << std::endl;
+//			}
 		}
 		pthread_mutex_unlock(count_mutex);
 
@@ -107,10 +107,10 @@ void* consume(void* data) {
 			memset(dataBuf, '\0', MSG_BUF_SIZE);
 			receiveMsg(sock, MSG_BUF_SIZE, dataBuf, true);
 
-			if (DEBUG) {
-				printf("Received message:\n%s\n", dataBuf);
-				fflush(stdout);
-			}
+//			if (DEBUG) {
+//				printf("Received message:\n%s\n", dataBuf);
+//				fflush(stdout);
+//			}
 
 			// Parse received header information
 			char* parsedCMD;
@@ -119,12 +119,22 @@ void* consume(void* data) {
 			char* parsedHeaders;
 
 			parsedCMD = strtok(dataBuf, " ");
+
+			// Only the GET command is supported
+			if (strcmp(parsedCMD, "GET") != 0) {
+				char err[] = "500 Internal Server Error";
+				sendMsg(sock, strlen(err), err);
+				close(sock);
+				delete[] dataBuf;
+				continue;
+			}
+
 			parsedHost = strtok(NULL, " ");
 			parsedVer = strtok(NULL, CRLF);
 			parsedHeaders = strtok(NULL, CRLF);
 
 			// Parse the headers into map as <key, value>
-			size_t index;
+			std::string::size_type index;
 			std::map<std::string, std::string> headerMap;
 			while (parsedHeaders != NULL) {
 				// Now split by :
@@ -146,103 +156,147 @@ void* consume(void* data) {
 			std::map<std::string, std::string>::iterator it = headerMap.find(
 					"Connection:");
 			if (it != headerMap.end()) {
-				if (DEBUG) {
-					std::cout << "'Connection:' exists in map\nExchanging...\n"
-							<< std::endl;
-				}
+//				if (DEBUG) {
+//					std::cout << "'Connection:' exists in map\nExchanging...\n"
+//							<< std::endl;
+//				}
 				it->second = " close";
 			}
 
-			if (DEBUG) {
-				printf("Command: %s\n", parsedCMD);
-				printf("Host: %s\n", parsedHost);
-				printf("HTTP version: %s\n", parsedVer);
-				// Print headers from map
-				for (it = headerMap.begin(); it != headerMap.end(); ++it) {
-					std::cout << it->first << it->second << std::endl;
-				}
-				fflush(stdout);
-			}
-
-			// Only the GET command is supported
-			if (strcmp(parsedCMD, "GET") != 0) {
-				std::cout << "Invalid command!" << std::endl;
-				close(sock);
-			}
-
-//			/*********************************************/
-//			// Setup connection to webserver
-//			// Create struct and zero out
-//			struct sockaddr_in sa;
-//			memset(&sa, 0, sizeof(sa));
-//
-//			// Check host name
-//			const char* hname = "www.google.com";
-//			struct hostent *host = gethostbyname(hname);
-//			if (!host) {
-//				error("Could not resolve host name");
-//			}
-//
-//			// Copy host name to struct
-//			memcpy(&sa.sin_addr.s_addr, host->h_addr_list[0], host->h_length);
-//
-//			// Set struct properties
-//			int port = atoi("80");
-//			sa.sin_family = AF_INET;
-//			sa.sin_port = htons(port);
-//
-//			// Open socket
-//			int web_s = socket(AF_INET, SOCK_STREAM, 0);
-//
-//			// Socket failed
-//			if (web_s < 0) {
-//				error("Failed to open socket");
-//			}
-//
-//			// Connect to host
-//			if (connect(web_s, (struct sockaddr*) &sa, sizeof(sa)) < 0) {
-//				error("Connection failed");
-//			} else if (DEBUG) {
-//				std::cout << "Connected to: ";
-//				printf("%s\n", host->h_name);
+//			if (DEBUG) {
+//				printf("Command: %s\n", parsedCMD);
+//				printf("Host: %s\n", parsedHost);
+//				printf("HTTP version: %s\n", parsedVer);
+//				// Print headers from map
+//				for (it = headerMap.begin(); it != headerMap.end(); ++it) {
+//					std::cout << it->first << it->second << std::endl;
+//				}
 //				fflush(stdout);
 //			}
-//
-//			// Send hardcoded GET
-//			char requestBuf[] =
-//					"GET /index.html HTTP/1.0\r\nHost: www.google.com\r\nConnection: close\r\n\r\n";
-//			sendMsg(web_s, strlen(requestBuf), requestBuf);
-//
-//			// Receive response from webserver
-//			char* responseBuf = new char[MSG_BUF_SIZE];
-//			memset(responseBuf, '\0', MSG_BUF_SIZE);
-//			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf, false);
-//
+
+			// Now extract host and relative path
+			// Must strip http://
+			// Get host
+			// Get port; if no port, use 80
+			// Find relative path (everything after last /; are we guaranteed that a slash exists?)
+
+			// Remove http://
+			std::string parsedHostStr = std::string(parsedHost);
+			std::string http = "http://";
+			index = parsedHostStr.find(http);
+			if (index != std::string::npos) {
+				parsedHostStr.erase(index, http.length());
+			}
+
+			// Get relative path
+			std::string parsedRelPath;
+			index = parsedHostStr.find('/');
+			if (index != std::string::npos) {
+				parsedRelPath = parsedHostStr.substr(index);
+				// Delete relative path from host str
+				parsedHostStr.erase(index, parsedRelPath.length());
+			}
+
+			// Find port
+			std::string parsedPort;
+			index = parsedHostStr.find(':');
+			if (index != std::string::npos) {
+				parsedPort = parsedHostStr.substr(index + 1);
+			} else {
+				parsedPort = "80";
+			}
+
+//			if (DEBUG) {
+//				std::cout << "Clean Host: " << parsedHostStr << std::endl;
+//				std::cout << "Port: " << parsedPort << std::endl;
+//				std::cout << "Relative Path: " << parsedRelPath << std::endl;
+//			}
+
+			/*********************************************/
+			// Setup connection to webserver
+			// Create struct and zero out
+			struct sockaddr_in sa;
+			memset(&sa, 0, sizeof(sa));
+
+			// Check host name
+			struct hostent *host = gethostbyname(parsedHostStr.c_str());
+			if (!host) {
+				error("Could not resolve host name");
+			}
+
+			// Copy host name to struct
+			memcpy(&sa.sin_addr.s_addr, host->h_addr_list[0], host->h_length);
+
+			// Set struct properties
+			int port = atoi(parsedPort.c_str());
+			sa.sin_family = AF_INET;
+			sa.sin_port = htons(port);
+
+			// Open socket
+			int web_s = socket(AF_INET, SOCK_STREAM, 0);
+
+			// Socket failed
+			if (web_s < 0) {
+				error("Failed to open socket");
+			}
+
+			// Connect to host
+			if (connect(web_s, (struct sockaddr*) &sa, sizeof(sa)) < 0) {
+				error("Connection failed");
+			}
+
+			// Built request string
+			std::stringstream ss;
+			ss << parsedCMD << " " << parsedRelPath << " " << parsedVer << CRLF
+					<< "Host: " << parsedHostStr << CRLF;
+			// Add all headers
+			for (it = headerMap.begin(); it != headerMap.end(); ++it) {
+				ss << it->first << it->second << CRLF;
+			}
+			// End with last CRLF to mark end of header
+			ss << CRLF;
+
+			std::string fullRequest = ss.str();
+//			std::cout << "My string is:" << std::endl << fullRequest
+//					<< std::endl;
+
+			char* req = new char[fullRequest.length() + 1];
+			strcpy(req, fullRequest.c_str());
+
+			// Send request
+			sendMsg(web_s, strlen(req), req);
+			delete[] req;
+
+			// Receive response from webserver
+			char* responseBuf = new char[MSG_BUF_SIZE];
+			memset(responseBuf, '\0', MSG_BUF_SIZE);
+			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf, false);
+
 //			if (DEBUG) {
 //				printf("%s\n", responseBuf);
 //				fflush(stdout);
 //			}
-//
-//			// Done with webserver
-//			close(web_s);
-//
-//			// Send response back to client
+
+			// Done with webserver
+			close(web_s);
+
+			// Send response back to client
 //			if (DEBUG) {
 //				std::cout << "Sending back to client (browser)" << std::endl;
 //			}
-//			sendMsg(sock, MSG_BUF_SIZE, responseBuf);
-//
+			sendMsg(sock, MSG_BUF_SIZE, responseBuf);
+
 //			if (DEBUG) {
 //				std::cout << "Message sent successfully to client" << std::endl;
 //			}
-//
-//			// Not getting full data from Google because
-//			//		a. Hardcoded GET request; browser doesn't ask for missing elements
-//			//		b. Ending receive by checking wrong char combo (CNLFCNLF)
-//
-//			// Cleanup
-//			delete[] dataBuf;
-			//delete[] responseBuf;
+
+			// Not getting full data from Google because
+			//		a. Hardcoded GET request; browser doesn't ask for missing elements
+			//		b. Ending receive by checking wrong char combo (CNLFCNLF)
+
+			// Cleanup
+			delete[] dataBuf;
+			delete[] responseBuf;
 			if (sock >= 0) {
 				close(sock);
 			}
