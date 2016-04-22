@@ -5,11 +5,11 @@
  */
 
 #include "p2.h"
-using namespace std;
+//using namespace std;
 
 // Handles CTRL-C signals
 void termination_handler(int signum) {
-	cout << endl << "Terminating proxy..." << endl;
+	std::cout << std::endl << "Terminating proxy..." << std::endl;
 	fflush(stdout);
 	done = 1;
 	close(server_s);
@@ -27,7 +27,7 @@ void signal_callback_handler(int signum) {
 }
 
 // Receive a message to a given socket file descriptor
-void receiveMsg(int s, int size, char *ptr) {
+void receiveMsg(int s, int size, char *ptr, bool headerOnly) {
 	int received = 0;
 	// First time we enter the ptr points to start of buffer
 	char* buf = ptr;
@@ -45,13 +45,16 @@ void receiveMsg(int s, int size, char *ptr) {
 		// Keep track of how much data has been received
 		size -= received;
 
-		// Exit loop if CRLF CRLF has been received
-		if (strstr(buf, CRLF CRLF)) {
-			break;
+		// Read only header
+		if (headerOnly) {
+			// Exit loop if CRLF CRLF has been received
+			if (strstr(buf, CRLF CRLF)) {
+				break;
+			}
 		}
 	}
 	if (DEBUG) {
-		cout << "Message received from fd = " << s << endl;
+		std::cout << "Message received from fd = " << s << std::endl;
 	}
 }
 
@@ -72,7 +75,7 @@ void sendMsg(int s, int size, char *ptr) {
 		size -= sent;
 	}
 	if (DEBUG) {
-		cout << "Message sent to fd = " << s << endl;
+		std::cout << "Message sent to fd = " << s << std::endl;
 	}
 }
 
@@ -91,97 +94,155 @@ void* consume(void* data) {
 			socketQ->pop();
 
 			if (DEBUG) {
-				cout << "Thread id = " << tid << " consumed socket = " << sock
-						<< endl;
+				std::cout << "Thread id = " << tid << " consumed socket = "
+						<< sock << std::endl;
 			}
 		}
 		pthread_mutex_unlock(count_mutex);
 
-		// Don't allocate buffer on stack
+		// Don't allocate message buffers on stack!
 		// Receive message from client
 		if (!done && sock >= 0) {
-			char* buf = new char[MSG_BUF_SIZE];
-			memset(buf, '\0', MSG_BUF_SIZE);
-			receiveMsg(sock, MSG_BUF_SIZE, buf);
+			char* dataBuf = new char[MSG_BUF_SIZE];
+			memset(dataBuf, '\0', MSG_BUF_SIZE);
+			receiveMsg(sock, MSG_BUF_SIZE, dataBuf, true);
 
 			if (DEBUG) {
-				printf("Received message:\n%s\n", buf);
+				printf("Received message:\n%s\n", dataBuf);
 				fflush(stdout);
 			}
 
-			/*********************************************/
-			// Setup connection to webserver
-			// Create struct and zero out
-			struct sockaddr_in sa;
-			memset(&sa, 0, sizeof(sa));
+			// Parse received header information
+			char* parsedCMD;
+			char* parsedHost;
+			char* parsedVer;
+			char* parsedHeaders;
 
-			// Check host name
-			const char* hname = "www.yahoo.com";
-			struct hostent *host = gethostbyname(hname);
-			if (!host) {
-				error("Could not resolve host name");
+			parsedCMD = strtok(dataBuf, " ");
+			parsedHost = strtok(NULL, " ");
+			parsedVer = strtok(NULL, CRLF);
+			parsedHeaders = strtok(NULL, CRLF);
+
+			// Parse the headers into map as <key, value>
+			size_t index;
+			std::map<std::string, std::string> headerMap;
+			while (parsedHeaders != NULL) {
+				// Now split by :
+				index = std::string(parsedHeaders).find(':', 0);
+				if (index != std::string::npos) {
+					std::pair<std::string, std::string> tempPair;
+					// Include the :
+					tempPair = std::make_pair(
+							std::string(parsedHeaders).substr(0, index + 1),
+							std::string(parsedHeaders).substr(index + 1));
+					headerMap.insert(tempPair);
+				}
+				// Each header is on a new line
+				// IS THIS OK OR WILL THE FUNCTION DELIMIT ON ONLY CR OR LF ALSO?
+				parsedHeaders = strtok(NULL, CRLF);
 			}
 
-			// Copy host name to struct
-			memcpy(&sa.sin_addr.s_addr, host->h_addr_list[0], host->h_length);
-
-			// Set struct properties
-			int port = atoi("80");
-			sa.sin_family = AF_INET;
-			sa.sin_port = htons(port);
-
-			// Open socket
-			int web_s = socket(AF_INET, SOCK_STREAM, 0);
-
-			// Socket failed
-			if (web_s < 0) {
-				error("Failed to open socket");
+			// Replace headers
+			std::map<std::string, std::string>::iterator it = headerMap.find(
+					"Connection:");
+			if (it != headerMap.end()) {
+				if (DEBUG) {
+					std::cout << "'Connection:' exists in map\nExchanging...\n"
+							<< std::endl;
+				}
+				it->second = " close";
 			}
 
-			// Connect to host
-			if (connect(web_s, (struct sockaddr*) &sa, sizeof(sa)) < 0) {
-				error("Connection failed");
-			} else if (DEBUG) {
-				cout << "Connected to: ";
-				printf("%s\n", host->h_name);
+			if (DEBUG) {
+				printf("Command: %s\n", parsedCMD);
+				printf("Host: %s\n", parsedHost);
+				printf("HTTP version: %s\n", parsedVer);
+				// Print headers from map
+				for (it = headerMap.begin(); it != headerMap.end(); ++it) {
+					std::cout << it->first << it->second << std::endl;
+				}
 				fflush(stdout);
 			}
 
-			// Send hardcoded GET
-			char requestBuf[] =
-					"GET /index.html HTTP/1.0\r\nConnection: close\r\n\r\n";
-			sendMsg(web_s, strlen(requestBuf), requestBuf);
-
-			// Receive response from webserver
-			char* responseBuf = new char[MSG_BUF_SIZE];
-			memset(responseBuf, '\0', MSG_BUF_SIZE);
-			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf);
-
-			if (DEBUG) {
-				printf("%s\n", responseBuf);
-				fflush(stdout);
+			// Only the GET command is supported
+			if (strcmp(parsedCMD, "GET") != 0) {
+				std::cout << "Invalid command!" << std::endl;
+				close(sock);
 			}
 
-			// Done with webserver
-			close(web_s);
-
-			// Send response back to client
-			if (DEBUG) {
-				cout << "Sending back to client (browser)" << endl;
-			}
-			sendMsg(sock, MSG_BUF_SIZE, responseBuf);
-
-			if (DEBUG) {
-				cout << "Message sent successfully to client" << endl;
-			}
-
-			// Not getting full data from Google because
-			//		a. Hardcoded GET request; browser doesn't ask for missing elements
-			//		b. Ending receive by checking wrong char combo (CNLFCNLF)
-
-			// Cleanup
-			delete[] buf;
-			delete[] responseBuf;
+//			/*********************************************/
+//			// Setup connection to webserver
+//			// Create struct and zero out
+//			struct sockaddr_in sa;
+//			memset(&sa, 0, sizeof(sa));
+//
+//			// Check host name
+//			const char* hname = "www.google.com";
+//			struct hostent *host = gethostbyname(hname);
+//			if (!host) {
+//				error("Could not resolve host name");
+//			}
+//
+//			// Copy host name to struct
+//			memcpy(&sa.sin_addr.s_addr, host->h_addr_list[0], host->h_length);
+//
+//			// Set struct properties
+//			int port = atoi("80");
+//			sa.sin_family = AF_INET;
+//			sa.sin_port = htons(port);
+//
+//			// Open socket
+//			int web_s = socket(AF_INET, SOCK_STREAM, 0);
+//
+//			// Socket failed
+//			if (web_s < 0) {
+//				error("Failed to open socket");
+//			}
+//
+//			// Connect to host
+//			if (connect(web_s, (struct sockaddr*) &sa, sizeof(sa)) < 0) {
+//				error("Connection failed");
+//			} else if (DEBUG) {
+//				std::cout << "Connected to: ";
+//				printf("%s\n", host->h_name);
+//				fflush(stdout);
+//			}
+//
+//			// Send hardcoded GET
+//			char requestBuf[] =
+//					"GET /index.html HTTP/1.0\r\nHost: www.google.com\r\nConnection: close\r\n\r\n";
+//			sendMsg(web_s, strlen(requestBuf), requestBuf);
+//
+//			// Receive response from webserver
+//			char* responseBuf = new char[MSG_BUF_SIZE];
+//			memset(responseBuf, '\0', MSG_BUF_SIZE);
+//			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf, false);
+//
+//			if (DEBUG) {
+//				printf("%s\n", responseBuf);
+//				fflush(stdout);
+//			}
+//
+//			// Done with webserver
+//			close(web_s);
+//
+//			// Send response back to client
+//			if (DEBUG) {
+//				std::cout << "Sending back to client (browser)" << std::endl;
+//			}
+//			sendMsg(sock, MSG_BUF_SIZE, responseBuf);
+//
+//			if (DEBUG) {
+//				std::cout << "Message sent successfully to client" << std::endl;
+//			}
+//
+//			// Not getting full data from Google because
+//			//		a. Hardcoded GET request; browser doesn't ask for missing elements
+//			//		b. Ending receive by checking wrong char combo (CNLFCNLF)
+//
+//			// Cleanup
+//			delete[] dataBuf;
+			//delete[] responseBuf;
 			if (sock >= 0) {
 				close(sock);
 			}
@@ -262,7 +323,7 @@ int main(int argc, char *argv[]) {
 
 	// Wait for connections
 	// Accepting up to MAX_CONN pending connections
-	cout << "Listening on port " << port << "..." << endl;
+	std::cout << "Listening on port " << port << "..." << std::endl;
 	if (listen(server_s, MAX_CONN) < 0) {
 		error("Failed to listen");
 	}
@@ -275,12 +336,12 @@ int main(int argc, char *argv[]) {
 		if (pthread_create(&pool[i], NULL, consume, &pool[i]) < 0) {
 			error("Could not create consumer thread");
 		} else if (DEBUG) {
-			cout << "Spawned thread id = " << pool[i] << endl;
+			std::cout << "Spawned thread id = " << pool[i] << std::endl;
 		}
 	}
 
 	// Queue for client connections
-	socketQ = new queue<int>();
+	socketQ = new std::queue<int>();
 
 	// Start producing
 	struct sockaddr_in client;
@@ -297,8 +358,8 @@ int main(int argc, char *argv[]) {
 
 		if (DEBUG) {
 			if (!done) {
-				cout << "Client (IP: " << inet_ntoa(client.sin_addr)
-						<< ") connected at fd = " << client_s << endl;
+				std::cout << "Client (IP: " << inet_ntoa(client.sin_addr)
+						<< ") connected at fd = " << client_s << std::endl;
 			}
 		}
 
@@ -314,7 +375,7 @@ int main(int argc, char *argv[]) {
 	// Wait for consumers to finish
 	for (int i = 0; i < MAX_THREADS; i++) {
 		if (DEBUG) {
-			cout << "Joining thread " << i << endl;
+			std::cout << "Joining thread " << i << std::endl;
 		}
 		pthread_join(pool[i], NULL);
 	}

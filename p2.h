@@ -13,6 +13,8 @@
 #include <cstdlib>
 #include <unistd.h>
 #include <string.h>
+#include <string>
+#include <sstream>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -24,6 +26,7 @@
 #include <queue>
 #include <semaphore.h>
 #include <arpa/inet.h>
+#include <map>
 
 // For built in thread delay
 //#include <thread>
