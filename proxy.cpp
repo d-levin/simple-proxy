@@ -21,9 +21,7 @@ void termination_handler(int signum) {
 
 // Catch SIGPIPE error
 void signal_callback_handler(int signum) {
-	if (DEBUG) {
-		printf("Caught signal SIGPIPE %d\n", signum);
-	}
+	printf("Caught signal SIGPIPE %d\n", signum);
 }
 
 // Receive a message to a given socket file descriptor
@@ -53,9 +51,6 @@ void receiveMsg(int s, int size, char *ptr, bool headerOnly) {
 			}
 		}
 	}
-	if (DEBUG) {
-		std::cout << "Message received from fd = " << s << std::endl;
-	}
 }
 
 // Send a message to a given socket file descriptor
@@ -74,14 +69,9 @@ void sendMsg(int s, int size, char *ptr) {
 		// Keep track of how much data has been sent
 		size -= sent;
 	}
-	if (DEBUG) {
-		std::cout << "Message sent to fd = " << s << std::endl;
-	}
 }
 
 void* consume(void* data) {
-	pthread_t tid = *((pthread_t*) data);
-
 	while (!done) {
 		// Consumer waits for items to process
 		sem_wait(job_queue_count);
@@ -92,11 +82,6 @@ void* consume(void* data) {
 		if (!socketQ->empty()) {
 			sock = socketQ->front();
 			socketQ->pop();
-
-//			if (DEBUG) {
-//				std::cout << "Thread id = " << tid << " consumed socket = "
-//						<< sock << std::endl;
-//			}
 		}
 		pthread_mutex_unlock(count_mutex);
 
@@ -107,10 +92,10 @@ void* consume(void* data) {
 			memset(dataBuf, '\0', MSG_BUF_SIZE);
 			receiveMsg(sock, MSG_BUF_SIZE, dataBuf, true);
 
-//			if (DEBUG) {
-//				printf("Received message:\n%s\n", dataBuf);
-//				fflush(stdout);
-//			}
+			// Change parsing here to only use std::strings
+			// to avoid memory leaks?
+
+			// When to close sockets? After read/write?
 
 			// Parse received header information
 			char* parsedCMD;
@@ -121,10 +106,10 @@ void* consume(void* data) {
 			parsedCMD = strtok(dataBuf, " ");
 
 			// Only the GET command is supported
-			if (strcmp(parsedCMD, "GET") != 0) {
+			if (!parsedCMD || strcmp(parsedCMD, "GET") != 0) {
 				char err[] = "500 Internal Server Error";
 				sendMsg(sock, strlen(err), err);
-				close(sock);
+				//close(sock);
 				delete[] dataBuf;
 				continue;
 			}
@@ -156,29 +141,8 @@ void* consume(void* data) {
 			std::map<std::string, std::string>::iterator it = headerMap.find(
 					"Connection:");
 			if (it != headerMap.end()) {
-//				if (DEBUG) {
-//					std::cout << "'Connection:' exists in map\nExchanging...\n"
-//							<< std::endl;
-//				}
 				it->second = " close";
 			}
-
-//			if (DEBUG) {
-//				printf("Command: %s\n", parsedCMD);
-//				printf("Host: %s\n", parsedHost);
-//				printf("HTTP version: %s\n", parsedVer);
-//				// Print headers from map
-//				for (it = headerMap.begin(); it != headerMap.end(); ++it) {
-//					std::cout << it->first << it->second << std::endl;
-//				}
-//				fflush(stdout);
-//			}
-
-			// Now extract host and relative path
-			// Must strip http://
-			// Get host
-			// Get port; if no port, use 80
-			// Find relative path (everything after last /; are we guaranteed that a slash exists?)
 
 			// Remove http://
 			std::string parsedHostStr = std::string(parsedHost);
@@ -206,22 +170,18 @@ void* consume(void* data) {
 				parsedPort = "80";
 			}
 
-//			if (DEBUG) {
-//				std::cout << "Clean Host: " << parsedHostStr << std::endl;
-//				std::cout << "Port: " << parsedPort << std::endl;
-//				std::cout << "Relative Path: " << parsedRelPath << std::endl;
-//			}
-
 			/*********************************************/
 			// Setup connection to webserver
 			// Create struct and zero out
 			struct sockaddr_in sa;
-			memset(&sa, 0, sizeof(sa));
+			bzero((char*) &sa, sizeof(sa));
 
 			// Check host name
 			struct hostent *host = gethostbyname(parsedHostStr.c_str());
 			if (!host) {
-				error("Could not resolve host name");
+				//error("Could not resolve host name");
+				delete[] dataBuf;
+				continue;
 			}
 
 			// Copy host name to struct
@@ -255,12 +215,13 @@ void* consume(void* data) {
 			}
 			// End with last CRLF to mark end of header
 			ss << CRLF;
-
 			std::string fullRequest = ss.str();
-//			std::cout << "My string is:" << std::endl << fullRequest
-//					<< std::endl;
+			ss.str(std::string());
+			ss.clear();
 
 			char* req = new char[fullRequest.length() + 1];
+			// Tried 0 and '\0' here, didn't matter, still seg faults
+			memset(req, '\0', fullRequest.length() + 1);
 			strcpy(req, fullRequest.c_str());
 
 			// Send request
@@ -272,32 +233,17 @@ void* consume(void* data) {
 			memset(responseBuf, '\0', MSG_BUF_SIZE);
 			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf, false);
 
-//			if (DEBUG) {
-//				printf("%s\n", responseBuf);
-//				fflush(stdout);
-//			}
-
 			// Done with webserver
 			close(web_s);
 
 			// Send response back to client
-//			if (DEBUG) {
-//				std::cout << "Sending back to client (browser)" << std::endl;
-//			}
 			sendMsg(sock, MSG_BUF_SIZE, responseBuf);
-
-//			if (DEBUG) {
-//				std::cout << "Message sent successfully to client" << std::endl;
-//			}
-
-			// Not getting full data from Google because
-			//		a. Hardcoded GET request; browser doesn't ask for missing elements
-			//		b. Ending receive by checking wrong char combo (CNLFCNLF)
 
 			// Cleanup
 			delete[] dataBuf;
 			delete[] responseBuf;
 			if (sock >= 0) {
+				std::cout << "Socket " << sock << " was closed!" << std::endl;
 				close(sock);
 			}
 		}
@@ -310,11 +256,11 @@ void* consume(void* data) {
 void cleanup() {
 	pthread_mutex_destroy(count_mutex);
 	// Alternative to sem_destroy (deprecated on OSX)
-//	sem_close(job_queue_count);
-//	sem_unlink(SEM_NAME);
-	if (sem_destroy(job_queue_count) < 0) {
-		error("Destroy semaphore failed");
-	}
+	sem_close(job_queue_count);
+	sem_unlink(SEM_NAME);
+//	if (sem_destroy(job_queue_count) < 0) {
+//		error("Destroy semaphore failed");
+//	}
 	while (!socketQ->empty()) {
 		socketQ->pop();
 	}
@@ -330,7 +276,16 @@ int main(int argc, char *argv[]) {
 
 	// Signal handlers
 	signal(SIGINT, termination_handler);
-	signal(SIGPIPE, signal_callback_handler);
+	//signal(SIGPIPE, signal_callback_handler);
+	signal(SIGPIPE, SIG_IGN);
+
+//	struct sigaction sa;
+//	sa.sa_handler = SIG_IGN;
+//	sa.sa_flags = 0;
+//	if (sigaction(SIGPIPE, &sa, 0) == -1) {
+//	  std::cout << "sigpipe caught" << std::endl;
+//	  //exit(1);
+//	}
 
 	// Synchronization
 	count_mutex = new pthread_mutex_t;
@@ -342,11 +297,11 @@ int main(int argc, char *argv[]) {
 	// Source:
 	// http://www.linuxdevcenter.com/pub/a/linux/2007/05/24/semaphores-in-linux.html?page=5
 	// Clear semaphore first
-//	sem_unlink(SEM_NAME);
-//	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
+	sem_unlink(SEM_NAME);
+	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
 	// For testing on cs2
-	job_queue_count = new sem_t;
-	sem_init(job_queue_count, 0, 0);
+//	job_queue_count = new sem_t;
+//	sem_init(job_queue_count, 0, 0);
 	if (job_queue_count == SEM_FAILED) {
 		//sem_unlink(SEM_NAME);
 		error("Unable to create semaphore");
@@ -354,7 +309,7 @@ int main(int argc, char *argv[]) {
 
 	// Set up server to listen for incoming connections
 	struct sockaddr_in server;
-	memset(&server, 0, sizeof(server));
+	bzero((char*) &server, sizeof(server));
 
 	// Set server struct properties
 	int port = atoi(argv[LISTEN_PORT]);
@@ -389,8 +344,6 @@ int main(int argc, char *argv[]) {
 	for (int i = 0; i < MAX_THREADS; i++) {
 		if (pthread_create(&pool[i], NULL, consume, &pool[i]) < 0) {
 			error("Could not create consumer thread");
-		} else if (DEBUG) {
-			std::cout << "Spawned thread id = " << pool[i] << std::endl;
 		}
 	}
 
@@ -399,7 +352,7 @@ int main(int argc, char *argv[]) {
 
 	// Start producing
 	struct sockaddr_in client;
-	memset(&client, 0, sizeof(client));
+	bzero((char*) &server, sizeof(server));
 	socklen_t csize = sizeof(client);
 	while (!done) {
 		// Accept client connection
@@ -407,13 +360,14 @@ int main(int argc, char *argv[]) {
 
 		// Prevent error from showing if program is exiting
 		if (client_s < 0 && !done) {
-			error("Failed to accept");
+			continue;
+			//error("Failed to accept");
 		}
 
 		if (DEBUG) {
 			if (!done) {
-				std::cout << "Client (IP: " << inet_ntoa(client.sin_addr)
-						<< ") connected at fd = " << client_s << std::endl;
+				std::cout << "Socket " << client_s << " was opened!"
+						<< std::endl;
 			}
 		}
 
