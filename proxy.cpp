@@ -109,7 +109,7 @@ void* consume(void* data) {
 			if (!parsedCMD || strcmp(parsedCMD, "GET") != 0) {
 				char err[] = "500 Internal Server Error";
 				sendMsg(sock, strlen(err), err);
-				//close(sock);
+				close(sock);
 				delete[] dataBuf;
 				continue;
 			}
@@ -117,6 +117,14 @@ void* consume(void* data) {
 			parsedHost = strtok(NULL, " ");
 			parsedVer = strtok(NULL, CRLF);
 			parsedHeaders = strtok(NULL, CRLF);
+
+			if (!parsedHost || !parsedVer) {
+				char err[] = "500 Internal Server Error";
+				sendMsg(sock, strlen(err), err);
+				close(sock);
+				delete[] dataBuf;
+				continue;
+			}
 
 			// Parse the headers into map as <key, value>
 			std::string::size_type index;
@@ -274,18 +282,15 @@ int main(int argc, char *argv[]) {
 		error("usage: ./proxy <port>\n");
 	}
 
-	// Signal handlers
+	// Handle CTRL-C
 	signal(SIGINT, termination_handler);
-	//signal(SIGPIPE, signal_callback_handler);
-	signal(SIGPIPE, SIG_IGN);
 
-//	struct sigaction sa;
-//	sa.sa_handler = SIG_IGN;
-//	sa.sa_flags = 0;
-//	if (sigaction(SIGPIPE, &sa, 0) == -1) {
-//	  std::cout << "sigpipe caught" << std::endl;
-//	  //exit(1);
-//	}
+	// Handle SIGPIPE
+	struct sigaction act;
+	act.sa_handler = SIG_IGN;
+	sigemptyset(&act.sa_mask);
+	act.sa_flags = 0;
+	sigaction(SIGPIPE, &act, NULL);
 
 	// Synchronization
 	count_mutex = new pthread_mutex_t;
@@ -294,12 +299,10 @@ int main(int argc, char *argv[]) {
 	}
 
 	// Alternative to sem_init (deprecated on OSX)
-	// Source:
-	// http://www.linuxdevcenter.com/pub/a/linux/2007/05/24/semaphores-in-linux.html?page=5
 	// Clear semaphore first
 	sem_unlink(SEM_NAME);
 	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
-	// For testing on cs2
+	// For running on cs2 to avoid permission errors
 //	job_queue_count = new sem_t;
 //	sem_init(job_queue_count, 0, 0);
 	if (job_queue_count == SEM_FAILED) {
@@ -325,7 +328,7 @@ int main(int argc, char *argv[]) {
 		error("Failed to open socket");
 	}
 
-	// Bind
+	// Assign address to socket
 	if (bind(server_s, (struct sockaddr*) &server, sizeof(server)) < 0) {
 		error("Failed to bind");
 	}
