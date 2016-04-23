@@ -2,10 +2,14 @@
  *    Filename: proxy.cpp
  *  Created on: Apr 11, 2016
  *      Author: Dennis Levin
+ * Description: Implementation of a simple web proxy.
+ * 			  	Works only with http (not https) and HTTP/1.0
+ * 			  	Any 'connection' header sent to the destination web
+ * 			  	server will be replaced with 'connection: close'
+ * 			  	to emulate HTTP/1.0
  */
 
-#include "p2.h"
-//using namespace std;
+#include "proxy.h"
 
 // Handles CTRL-C signals
 void termination_handler(int signum) {
@@ -17,11 +21,6 @@ void termination_handler(int signum) {
 	for (int i = 0; i < MAX_THREADS; i++) {
 		sem_post(job_queue_count);
 	}
-}
-
-// Catch SIGPIPE error
-void signal_callback_handler(int signum) {
-	printf("Caught signal SIGPIPE %d\n", signum);
 }
 
 // Receive a message to a given socket file descriptor
@@ -60,7 +59,7 @@ void sendMsg(int s, int size, char *ptr) {
 		// Check error
 		if (sent < 0) {
 			break;
-			error("Write failed");
+			//error("Write failed");
 		}
 
 		// Move pointer forward in struct by size of sent data
@@ -107,8 +106,8 @@ void* consume(void* data) {
 
 			// Only the GET command is supported
 			if (!parsedCMD || strcmp(parsedCMD, "GET") != 0) {
-				char err[] = "500 Internal Server Error";
-				sendMsg(sock, strlen(err), err);
+				//char err[] = "500 Internal Server Error";
+				//sendMsg(sock, strlen(err), err);
 				close(sock);
 				delete[] dataBuf;
 				continue;
@@ -135,9 +134,14 @@ void* consume(void* data) {
 				if (index != std::string::npos) {
 					std::pair<std::string, std::string> tempPair;
 					// Include the :
-					tempPair = std::make_pair(
-							std::string(parsedHeaders).substr(0, index + 1),
-							std::string(parsedHeaders).substr(index + 1));
+					// Convert header field to lowercase before inserting
+					std::string key = std::string(parsedHeaders).substr(0,
+							index + 1);
+					std::transform(key.begin(), key.end(), key.begin(),
+							tolower);
+					std::string value = std::string(parsedHeaders).substr(
+							index + 1);
+					tempPair = std::make_pair(key, value);
 					headerMap.insert(tempPair);
 				}
 				// Each header is on a new line
@@ -147,9 +151,18 @@ void* consume(void* data) {
 
 			// Replace headers
 			std::map<std::string, std::string>::iterator it = headerMap.find(
-					"Connection:");
+					"connection:");
 			if (it != headerMap.end()) {
 				it->second = " close";
+			}
+
+			// Print headers
+			std::cout << "Command: " << parsedCMD << std::endl;
+			std::cout << "Host: " << parsedHost << std::endl;
+			std::cout << "Version: " << parsedVer << std::endl;
+			std::cout << "Headers:" << std::endl;
+			for (it = headerMap.begin(); it != headerMap.end(); ++it) {
+				std::cout << it->first << it->second << std::endl;
 			}
 
 			// Remove http://
@@ -215,20 +228,30 @@ void* consume(void* data) {
 
 			// Built request string
 			std::stringstream ss;
-			ss << parsedCMD << " " << parsedRelPath << " " << parsedVer << CRLF
-					<< "Host: " << parsedHostStr << CRLF;
+			ss << parsedCMD << " " << parsedRelPath << " " << parsedVer << CRLF;
+
 			// Add all headers
 			for (it = headerMap.begin(); it != headerMap.end(); ++it) {
 				ss << it->first << it->second << CRLF;
 			}
+
+			// If host not included, add
+			it = headerMap.find("host:");
+			if (it == headerMap.end()) {
+				ss << "Host: " << parsedHostStr << CRLF;
+			}
+
 			// End with last CRLF to mark end of header
 			ss << CRLF;
 			std::string fullRequest = ss.str();
+
+			// Cleanup stream
 			ss.str(std::string());
 			ss.clear();
 
+			std::cout << "FULL REQUEST STRING: \n" << fullRequest << std::endl;
+
 			char* req = new char[fullRequest.length() + 1];
-			// Tried 0 and '\0' here, didn't matter, still seg faults
 			memset(req, '\0', fullRequest.length() + 1);
 			strcpy(req, fullRequest.c_str());
 
@@ -241,6 +264,8 @@ void* consume(void* data) {
 			memset(responseBuf, '\0', MSG_BUF_SIZE);
 			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf, false);
 
+			std::cout << "FULL RESPONSE STRING: \n" << responseBuf << std::endl;
+
 			// Done with webserver
 			close(web_s);
 
@@ -251,7 +276,6 @@ void* consume(void* data) {
 			delete[] dataBuf;
 			delete[] responseBuf;
 			if (sock >= 0) {
-				std::cout << "Socket " << sock << " was closed!" << std::endl;
 				close(sock);
 			}
 		}
@@ -282,10 +306,10 @@ int main(int argc, char *argv[]) {
 		error("usage: ./proxy <port>\n");
 	}
 
-	// Handle CTRL-C
+	// Handle CTRL-C signals
 	signal(SIGINT, termination_handler);
 
-	// Handle SIGPIPE
+	// Handle SIGPIPE signals
 	struct sigaction act;
 	act.sa_handler = SIG_IGN;
 	sigemptyset(&act.sa_mask);
@@ -365,13 +389,6 @@ int main(int argc, char *argv[]) {
 		if (client_s < 0 && !done) {
 			continue;
 			//error("Failed to accept");
-		}
-
-		if (DEBUG) {
-			if (!done) {
-				std::cout << "Socket " << client_s << " was opened!"
-						<< std::endl;
-			}
 		}
 
 		// Add to queue
