@@ -145,7 +145,6 @@ void* consume(void* data) {
 					headerMap.insert(tempPair);
 				}
 				// Each header is on a new line
-				// IS THIS OK OR WILL THE FUNCTION DELIMIT ON ONLY CR OR LF ALSO?
 				parsedHeaders = strtok(NULL, CRLF);
 			}
 
@@ -154,15 +153,6 @@ void* consume(void* data) {
 					"connection:");
 			if (it != headerMap.end()) {
 				it->second = " close";
-			}
-
-			// Print headers
-			std::cout << "Command: " << parsedCMD << std::endl;
-			std::cout << "Host: " << parsedHost << std::endl;
-			std::cout << "Version: " << parsedVer << std::endl;
-			std::cout << "Headers:" << std::endl;
-			for (it = headerMap.begin(); it != headerMap.end(); ++it) {
-				std::cout << it->first << it->second << std::endl;
 			}
 
 			// Remove http://
@@ -249,8 +239,7 @@ void* consume(void* data) {
 			ss.str(std::string());
 			ss.clear();
 
-			std::cout << "FULL REQUEST STRING: \n" << fullRequest << std::endl;
-
+			// Prepare request for transmission
 			char* req = new char[fullRequest.length() + 1];
 			memset(req, '\0', fullRequest.length() + 1);
 			strcpy(req, fullRequest.c_str());
@@ -263,8 +252,6 @@ void* consume(void* data) {
 			char* responseBuf = new char[MSG_BUF_SIZE];
 			memset(responseBuf, '\0', MSG_BUF_SIZE);
 			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf, false);
-
-			std::cout << "FULL RESPONSE STRING: \n" << responseBuf << std::endl;
 
 			// Done with webserver
 			close(web_s);
@@ -402,9 +389,6 @@ int main(int argc, char *argv[]) {
 
 	// Wait for consumers to finish
 	for (int i = 0; i < MAX_THREADS; i++) {
-		if (DEBUG) {
-			std::cout << "Joining thread " << i << std::endl;
-		}
 		pthread_join(pool[i], NULL);
 	}
 
