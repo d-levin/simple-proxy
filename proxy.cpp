@@ -132,6 +132,7 @@ void* consume(void* data) {
 					// Convert header field to lowercase before inserting
 					std::string key = std::string(parsedHeaders).substr(0,
 							index + 1);
+                    std::cout << key << std::endl;
 					std::transform(key.begin(), key.end(), key.begin(),
 							::tolower);
 					std::string value = std::string(parsedHeaders).substr(
@@ -274,8 +275,8 @@ void* consume(void* data) {
 void cleanup() {
 	pthread_mutex_destroy(count_mutex);
 	// Alternative to sem_destroy (deprecated on OSX)
-//	sem_close(job_queue_count);
-//	sem_unlink(SEM_NAME);
+	//sem_close(job_queue_count);
+	//sem_unlink(SEM_NAME);
 	if (sem_destroy(job_queue_count) < 0) {
 		error("Destroy semaphore failed");
 	}
@@ -322,7 +323,7 @@ int main(int argc, char *argv[]) {
 
 	// Set up server to listen for incoming connections
 	struct sockaddr_in server;
-	bzero((char*) &server, sizeof(server));
+    memset(&server, 0, sizeof(server));
 
 	// Set server struct properties
 	int port = atoi(argv[LISTEN_PORT]);
@@ -365,7 +366,7 @@ int main(int argc, char *argv[]) {
 
 	// Start producing
 	struct sockaddr_in client;
-	bzero((char*) &server, sizeof(server));
+    memset(&client, 0, sizeof(client));
 	socklen_t csize = sizeof(client);
 	while (!done) {
 		// Accept client connection
@@ -373,6 +374,7 @@ int main(int argc, char *argv[]) {
 
 		// Prevent error from showing if program is exiting
 		if (client_s < 0 && !done) {
+            //close(client_s);
 			continue;
 			//error("Failed to accept");
 		}
