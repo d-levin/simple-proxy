@@ -91,11 +91,6 @@ void* consume(void* data) {
 			memset(dataBuf, '\0', MSG_BUF_SIZE);
 			receiveMsg(sock, MSG_BUF_SIZE, dataBuf, true);
 
-			// Change parsing here to only use std::strings
-			// to avoid memory leaks?
-
-			// When to close sockets? After read/write?
-
 			// Parse received header information
 			char* parsedCMD;
 			char* parsedHost;
@@ -138,7 +133,7 @@ void* consume(void* data) {
 					std::string key = std::string(parsedHeaders).substr(0,
 							index + 1);
 					std::transform(key.begin(), key.end(), key.begin(),
-							tolower);
+							::tolower);
 					std::string value = std::string(parsedHeaders).substr(
 							index + 1);
 					tempPair = std::make_pair(key, value);
@@ -208,12 +203,16 @@ void* consume(void* data) {
 
 			// Socket failed
 			if (web_s < 0) {
-				error("Failed to open socket");
+				//error("Failed to open socket");
+				delete[] dataBuf;
+				continue;
 			}
 
 			// Connect to host
 			if (connect(web_s, (struct sockaddr*) &sa, sizeof(sa)) < 0) {
-				error("Connection failed");
+				//error("Connection failed");
+				delete[] dataBuf;
+				continue;
 			}
 
 			// Built request string
@@ -275,11 +274,11 @@ void* consume(void* data) {
 void cleanup() {
 	pthread_mutex_destroy(count_mutex);
 	// Alternative to sem_destroy (deprecated on OSX)
-	sem_close(job_queue_count);
-	sem_unlink(SEM_NAME);
-//	if (sem_destroy(job_queue_count) < 0) {
-//		error("Destroy semaphore failed");
-//	}
+//	sem_close(job_queue_count);
+//	sem_unlink(SEM_NAME);
+	if (sem_destroy(job_queue_count) < 0) {
+		error("Destroy semaphore failed");
+	}
 	while (!socketQ->empty()) {
 		socketQ->pop();
 	}
@@ -306,16 +305,16 @@ int main(int argc, char *argv[]) {
 	// Synchronization
 	count_mutex = new pthread_mutex_t;
 	if (pthread_mutex_init(count_mutex, NULL) != 0) {
-		error("mutex failed");
+		error("Mutex init failed");
 	}
 
 	// Alternative to sem_init (deprecated on OSX)
 	// Clear semaphore first
-	sem_unlink(SEM_NAME);
-	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
+//	sem_unlink(SEM_NAME);
+//	job_queue_count = sem_open(SEM_NAME, O_CREAT, SEM_PERMISSIONS, 0);
 	// For running on cs2 to avoid permission errors
-//	job_queue_count = new sem_t;
-//	sem_init(job_queue_count, 0, 0);
+	job_queue_count = new sem_t;
+	sem_init(job_queue_count, 0, 0);
 	if (job_queue_count == SEM_FAILED) {
 		//sem_unlink(SEM_NAME);
 		error("Unable to create semaphore");
