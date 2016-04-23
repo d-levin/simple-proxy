@@ -16,6 +16,7 @@ void termination_handler(int signum) {
 	std::cout << std::endl << "Terminating proxy..." << std::endl;
 	fflush(stdout);
 	done = 1;
+	shutdown(server_s, SHUT_RDWR);
 	close(server_s);
 	// Fake job to wake up consumers one last time
 	for (int i = 0; i < MAX_THREADS; i++) {
@@ -70,6 +71,12 @@ void sendMsg(int s, int size, char *ptr) {
 	}
 }
 
+void cleanOnError(int sock, char* dataBuf) {
+	shutdown(sock, SHUT_RDWR);
+	close(sock);
+	delete[] dataBuf;
+}
+
 void* consume(void* data) {
 	while (!done) {
 		// Consumer waits for items to process
@@ -92,32 +99,22 @@ void* consume(void* data) {
 			receiveMsg(sock, MSG_BUF_SIZE, dataBuf, true);
 
 			// Parse received header information
-            char* savePtr;
-            char* parsedCMD;
+			char* savePtr;
+			char* parsedCMD;
 			char* parsedHost;
 			char* parsedVer;
 			char* parsedHeaders;
 
 			parsedCMD = strtok_r(dataBuf, " ", &savePtr);
-
-			// Only the GET command is supported
-			if (!parsedCMD || strcmp(parsedCMD, "GET") != 0) {
-				//char err[] = "500 Internal Server Error";
-				//sendMsg(sock, strlen(err), err);
-				close(sock);
-				delete[] dataBuf;
-				continue;
-			}
-
 			parsedHost = strtok_r(NULL, " ", &savePtr);
 			parsedVer = strtok_r(NULL, CRLF, &savePtr);
 			parsedHeaders = strtok_r(NULL, CRLF, &savePtr);
 
-			if (!parsedHost || !parsedVer) {
-				char err[] = "500 Internal Server Error";
-				sendMsg(sock, strlen(err), err);
-				close(sock);
-				delete[] dataBuf;
+			// Verify information and command
+			if (!parsedCMD || (strcmp(parsedCMD, "GET") != 0) || !parsedHost
+					|| !parsedVer) {
+				sendMsg(sock, strlen(errMsg), (char*) errMsg);
+				cleanOnError(sock, dataBuf);
 				continue;
 			}
 
@@ -133,7 +130,6 @@ void* consume(void* data) {
 					// Convert header field to lowercase before inserting
 					std::string key = std::string(parsedHeaders).substr(0,
 							index + 1);
-                    std::cout << key << std::endl;
 					std::transform(key.begin(), key.end(), key.begin(),
 							::tolower);
 					std::string value = std::string(parsedHeaders).substr(
@@ -178,45 +174,6 @@ void* consume(void* data) {
 				parsedPort = "80";
 			}
 
-			/*********************************************/
-			// Setup connection to webserver
-			// Create struct and zero out
-			struct sockaddr_in sa;
-			bzero((char*) &sa, sizeof(sa));
-
-			// Check host name
-			struct hostent *host = gethostbyname(parsedHostStr.c_str());
-			if (!host) {
-				//error("Could not resolve host name");
-				delete[] dataBuf;
-				continue;
-			}
-
-			// Copy host name to struct
-			memcpy(&sa.sin_addr.s_addr, host->h_addr_list[0], host->h_length);
-
-			// Set struct properties
-			int port = atoi(parsedPort.c_str());
-			sa.sin_family = AF_INET;
-			sa.sin_port = htons(port);
-
-			// Open socket
-			int web_s = socket(AF_INET, SOCK_STREAM, 0);
-
-			// Socket failed
-			if (web_s < 0) {
-				//error("Failed to open socket");
-				delete[] dataBuf;
-				continue;
-			}
-
-			// Connect to host
-			if (connect(web_s, (struct sockaddr*) &sa, sizeof(sa)) < 0) {
-				//error("Connection failed");
-				delete[] dataBuf;
-				continue;
-			}
-
 			// Built request string
 			std::stringstream ss;
 			ss << parsedCMD << " " << parsedRelPath << " " << parsedVer << CRLF;
@@ -240,6 +197,38 @@ void* consume(void* data) {
 			ss.str(std::string());
 			ss.clear();
 
+			/* Setup connection to webserver */
+			struct sockaddr_in sa;
+			bzero((char*) &sa, sizeof(sa));
+
+			// Verify host name
+			struct hostent *host = gethostbyname(parsedHostStr.c_str());
+			if (!host) {
+				cleanOnError(sock, dataBuf);
+				continue;
+			}
+
+			// Copy host name to struct
+			memcpy(&sa.sin_addr.s_addr, host->h_addr_list[0], host->h_length);
+
+			// Set struct properties
+			int port = atoi(parsedPort.c_str());
+			sa.sin_family = AF_INET;
+			sa.sin_port = htons(port);
+
+			// Open socket to webserver
+			int web_s;
+			if ((web_s = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+				cleanOnError(sock, dataBuf);
+				continue;
+			}
+
+			// Connect to host
+			if (connect(web_s, (struct sockaddr*) &sa, sizeof(sa)) < 0) {
+				cleanOnError(sock, dataBuf);
+				continue;
+			}
+
 			// Prepare request for transmission
 			char* req = new char[fullRequest.length() + 1];
 			memset(req, '\0', fullRequest.length() + 1);
@@ -255,6 +244,7 @@ void* consume(void* data) {
 			receiveMsg(web_s, MSG_BUF_SIZE, responseBuf, false);
 
 			// Done with webserver
+			shutdown(web_s, SHUT_RDWR);
 			close(web_s);
 
 			// Send response back to client
@@ -263,9 +253,8 @@ void* consume(void* data) {
 			// Cleanup
 			delete[] dataBuf;
 			delete[] responseBuf;
-			if (sock >= 0) {
-				close(sock);
-			}
+			shutdown(sock, SHUT_RDWR);
+			close(sock);
 		}
 	}
 
@@ -274,6 +263,11 @@ void* consume(void* data) {
 }
 
 void cleanup() {
+	// Wait for consumers to finish
+	for (int i = 0; i < MAX_THREADS; i++) {
+		pthread_join(pool[i], NULL);
+	}
+
 	pthread_mutex_destroy(count_mutex);
 	// Alternative to sem_destroy (deprecated on OSX)
 	//sem_close(job_queue_count);
@@ -281,6 +275,8 @@ void cleanup() {
 	if (sem_destroy(job_queue_count) < 0) {
 		error("Destroy semaphore failed");
 	}
+
+	// First empty queue then deallocate
 	while (!socketQ->empty()) {
 		socketQ->pop();
 	}
@@ -288,12 +284,7 @@ void cleanup() {
 	delete[] pool;
 }
 
-int main(int argc, char *argv[]) {
-	// Check number of arguments
-	if (argc < 2) {
-		error("usage: ./proxy <port>\n");
-	}
-
+void setupSigHandlers() {
 	// Handle CTRL-C signals
 	signal(SIGINT, termination_handler);
 
@@ -303,8 +294,9 @@ int main(int argc, char *argv[]) {
 	sigemptyset(&act.sa_mask);
 	act.sa_flags = 0;
 	sigaction(SIGPIPE, &act, NULL);
+}
 
-	// Synchronization
+void initSynchronization() {
 	count_mutex = new pthread_mutex_t;
 	if (pthread_mutex_init(count_mutex, NULL) != 0) {
 		error("Mutex init failed");
@@ -321,37 +313,9 @@ int main(int argc, char *argv[]) {
 		//sem_unlink(SEM_NAME);
 		error("Unable to create semaphore");
 	}
+}
 
-	// Set up server to listen for incoming connections
-	struct sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-
-	// Set server struct properties
-	int port = atoi(argv[LISTEN_PORT]);
-	server.sin_family = AF_INET;
-	server.sin_addr.s_addr = INADDR_ANY;
-	server.sin_port = htons(port);
-
-	// Open socket
-	server_s = socket(AF_INET, SOCK_STREAM, 0);
-
-	// Socket failed
-	if (server_s < 0) {
-		error("Failed to open socket");
-	}
-
-	// Assign address to socket
-	if (bind(server_s, (struct sockaddr*) &server, sizeof(server)) < 0) {
-		error("Failed to bind");
-	}
-
-	// Wait for connections
-	// Accepting up to MAX_CONN pending connections
-	std::cout << "Listening on port " << port << "..." << std::endl;
-	if (listen(server_s, MAX_CONN) < 0) {
-		error("Failed to listen");
-	}
-
+void initThreadPool() {
 	// Thread pool
 	pool = new pthread_t[MAX_THREADS];
 
@@ -361,23 +325,65 @@ int main(int argc, char *argv[]) {
 			error("Could not create consumer thread");
 		}
 	}
+}
 
+int main(int argc, char *argv[]) {
+	// Check number of arguments
+	if (argc < 2) {
+		error("usage: ./proxy <port>\n");
+	}
+
+	// Catch CTRL-C and SIGPIPE
+	setupSigHandlers();
+
+	// Setup thread synchronization
+	initSynchronization();
+
+	// Start the thread pool
+	initThreadPool();
+
+	/* Set up server to listen for incoming connections */
+	struct sockaddr_in server;
+	memset(&server, 0, sizeof(server));
+
+	// Set server struct properties
+	int port = atoi(argv[LISTEN_PORT]);
+	server.sin_family = AF_INET;
+	server.sin_addr.s_addr = INADDR_ANY;
+	server.sin_port = htons(port);
+
+	// Open socket
+	if ((server_s = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+		error("Failed to open socket");
+	}
+
+	// Assign address to socket
+	if (bind(server_s, (struct sockaddr*) &server, sizeof(server)) < 0) {
+		error("Failed to bind");
+	}
+
+	// Wait for connections
+	std::cout << "Listening on port " << port << "..." << std::endl;
+	if (listen(server_s, SOMAXCONN) < 0) {
+		error("Failed to listen");
+	}
+
+	/* Start producing */
 	// Queue for client connections
 	socketQ = new std::queue<int>();
-
-	// Start producing
 	struct sockaddr_in client;
-    memset(&client, 0, sizeof(client));
+	memset(&client, 0, sizeof(client));
 	socklen_t csize = sizeof(client);
 	while (!done) {
 		// Accept client connection
 		int client_s = accept(server_s, (struct sockaddr*) &client, &csize);
 
 		// Prevent error from showing if program is exiting
+		// Not a reason to terminate proxy
 		if (client_s < 0 && !done) {
-            //close(client_s);
+			shutdown(client_s, SHUT_RDWR);
+			close(client_s);
 			continue;
-			//error("Failed to accept");
 		}
 
 		// Add to queue
@@ -387,11 +393,6 @@ int main(int argc, char *argv[]) {
 		pthread_mutex_unlock(count_mutex);
 		// Ready for consumption
 		sem_post(job_queue_count);
-	}
-
-	// Wait for consumers to finish
-	for (int i = 0; i < MAX_THREADS; i++) {
-		pthread_join(pool[i], NULL);
 	}
 
 	// Deallocate and cleanup before exit
