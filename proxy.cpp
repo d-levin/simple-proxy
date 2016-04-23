@@ -92,12 +92,13 @@ void* consume(void* data) {
 			receiveMsg(sock, MSG_BUF_SIZE, dataBuf, true);
 
 			// Parse received header information
-			char* parsedCMD;
+            char* savePtr;
+            char* parsedCMD;
 			char* parsedHost;
 			char* parsedVer;
 			char* parsedHeaders;
 
-			parsedCMD = strtok(dataBuf, " ");
+			parsedCMD = strtok_r(dataBuf, " ", &savePtr);
 
 			// Only the GET command is supported
 			if (!parsedCMD || strcmp(parsedCMD, "GET") != 0) {
@@ -108,9 +109,9 @@ void* consume(void* data) {
 				continue;
 			}
 
-			parsedHost = strtok(NULL, " ");
-			parsedVer = strtok(NULL, CRLF);
-			parsedHeaders = strtok(NULL, CRLF);
+			parsedHost = strtok_r(NULL, " ", &savePtr);
+			parsedVer = strtok_r(NULL, CRLF, &savePtr);
+			parsedHeaders = strtok_r(NULL, CRLF, &savePtr);
 
 			if (!parsedHost || !parsedVer) {
 				char err[] = "500 Internal Server Error";
@@ -141,7 +142,7 @@ void* consume(void* data) {
 					headerMap.insert(tempPair);
 				}
 				// Each header is on a new line
-				parsedHeaders = strtok(NULL, CRLF);
+				parsedHeaders = strtok_r(NULL, CRLF, &savePtr);
 			}
 
 			// Replace headers
