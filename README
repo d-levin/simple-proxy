@@ -26,6 +26,7 @@ is then checked for missing or incorrect headers. Connection is changed to close
 and a Host header is added if missing. A full request string is then build using
 stringstream. The request string is written to the webserver socket and the 
 response is immediately forwarded back to the client without parsing.
+For any other request command than GET, the proxy will return 500 Internal Error.
  
 LIMITATIONS:
 Secure content (https) will not be loaded

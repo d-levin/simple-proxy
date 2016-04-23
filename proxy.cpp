@@ -146,6 +146,11 @@ void* consume(void* data) {
 					"connection:");
 			if (it != headerMap.end()) {
 				it->second = " close";
+			} else {
+				// Add connection header if missing
+				std::pair<std::string, std::string> tempPair;
+				tempPair = std::make_pair("connection:", " close");
+				headerMap.insert(tempPair);
 			}
 
 			// Remove http://
@@ -192,6 +197,10 @@ void* consume(void* data) {
 			// End with last CRLF to mark end of header
 			ss << CRLF;
 			std::string fullRequest = ss.str();
+
+			if (DEBUG) {
+				std::cout << fullRequest << std::endl;
+			}
 
 			// Cleanup stream
 			ss.str(std::string());
