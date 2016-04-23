@@ -4,7 +4,7 @@
 
 # Except
 !proxy.cpp
-!p2.h
+!proxy.h
 !Makefile
 !README
 !.gitignore
