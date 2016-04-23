@@ -1,0 +1,32 @@
+P2 - Implementing a Simple HTTP Web Proxy
+Dennis Levin, Matt Jordan
+April 28, 2016
+
+Files: proxy.cpp, proxy.h, Makefile, readme.txt
+
+Run proxy with ./proxy server_port
+Proxy can be quit by signaling CTRL-C
+
+DESIGN & IMPLEMENTATION HIGHLIGHTS:
+PROXY:
+Handles concurrent connections and requests by using the producer-consumer pattern.
+The main thread accepts client connections and produces socket file descriptors.
+A thread pool of 30 threads then consumes the file descriptors out of a synchronized
+queue. The client request string is processed/parsed and forwarded to the target
+server. The server response is forwarded unprocessed back to the client.
+
+IMPLEMENTATION DESIGN DECISION:
+The thread pool consists of 30 threads. A semaphore and mutex lock are used for
+synchronizing the consumer buffer among the threads. On consume, the entire 
+request message from the client is loaded into a buffer. The buffer is then
+processed in order to extract the request command, path, HTTP version and any
+headers that accompanied the request. The headers, separated by CRLF, are
+stored in a map with key being the type of header (e.g. Content-Type). The map
+is then checked for missing or incorrect headers. Connection is changed to close
+and a Host header is added if missing. A full request string is then build using
+stringstream. The request string is written to the webserver socket and the 
+response is immediately forwarded back to the client without parsing.
+ 
+LIMITATIONS:
+Secure content (https) will not be loaded
+Not all content is loaded if a website is hosting content on a CDN (e.g. Cloudflare)
