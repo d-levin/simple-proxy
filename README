@@ -7,6 +7,12 @@ Files: proxy.cpp, proxy.h, Makefile, readme.txt
 Run proxy with ./proxy server_port
 Proxy can be quit by signaling CTRL-C
 
+BROWSER SETTINGS:
+Firefox: Specify proxy and change the following settings in about:config
+		 network.http.proxy.keepalive 	= false
+		 network.http.proxy.pipelining 	= false
+		 network.http.proxy.version 	= 1.0
+
 DESIGN & IMPLEMENTATION HIGHLIGHTS:
 PROXY:
 Handles concurrent connections and requests by using the producer-consumer pattern.
@@ -27,6 +33,8 @@ and a Host header is added if missing. A full request string is then build using
 stringstream. The request string is written to the webserver socket and the 
 response is immediately forwarded back to the client without parsing.
 For any other request command than GET, the proxy will return 500 Internal Error.
+The proxy WILL NOT change a HTTP/1.1 request to HTTP/1.0. It is the client's
+responsibility to set their browser to use only HTTP/1.0 before connecting to proxy.
  
 LIMITATIONS:
 Secure content (https) will not be loaded

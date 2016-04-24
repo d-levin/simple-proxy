@@ -36,7 +36,7 @@
 // Only for use on systems where sem_init/sem_destroy are deprecated (OSX)
 #define SEM_PERMISSIONS	0644
 
-// Send/receive message buf size 1MB
+// Send/receive message buf size
 #define MSG_BUF_SIZE	1000000
 
 // Set to 0 to disable debug messages
@@ -51,7 +51,7 @@ std::queue<int>* socketQ;
 pthread_t* pool;
 
 // Error message for client
-const char* errMsg = "500 Internal Error\r\n\r\n";
+const char* errMsg = "HTTP/1.0 500 Internal Server Error\r\n\r\n";
 
 // Controls termination of program
 static volatile bool done = 0;

@@ -72,8 +72,10 @@ void sendMsg(int s, int size, char *ptr) {
 }
 
 void cleanOnError(int sock, char* dataBuf) {
-	shutdown(sock, SHUT_RDWR);
-	close(sock);
+	if (sock > -1) {
+		shutdown(sock, SHUT_RDWR);
+		close(sock);
+	}
 	delete[] dataBuf;
 }
 
@@ -140,6 +142,8 @@ void* consume(void* data) {
 				// Each header is on a new line
 				parsedHeaders = strtok_r(NULL, CRLF, &savePtr);
 			}
+
+			// Replace HTTP version?
 
 			// Replace headers
 			std::map<std::string, std::string>::iterator it = headerMap.find(
