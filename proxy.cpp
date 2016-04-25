@@ -71,7 +71,7 @@ void sendMsg(int s, int size, char *ptr) {
 	}
 }
 
-void cleanOnError(int sock, char* dataBuf) {
+void cleanOnError(int sock, char* &dataBuf) {
 	if (sock > -1) {
 		shutdown(sock, SHUT_RDWR);
 		close(sock);
