@@ -38,4 +38,3 @@ responsibility to set their browser to use only HTTP/1.0 before connecting to pr
  
 LIMITATIONS:
 Secure content (https) will not be loaded
-Not all content is loaded if a website is hosting content on a CDN (e.g. Cloudflare)
