@@ -33,8 +33,8 @@ and a Host header is added if missing. A full request string is then build using
 stringstream. The request string is written to the webserver socket and the 
 response is immediately forwarded back to the client without parsing.
 For any other request command than GET, the proxy will return 500 Internal Error.
-The proxy WILL NOT change a HTTP/1.1 request to HTTP/1.0. It is the client's
-responsibility to set their browser to use only HTTP/1.0 before connecting to proxy.
+If the client's browser is not correctly configured to only send HTTP/1.0
+requests, the proxy will change the request line from HTTP/1.1 to HTTP/1.0.
  
 LIMITATIONS:
 Secure content (https) will not be loaded

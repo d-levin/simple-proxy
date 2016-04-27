@@ -120,6 +120,11 @@ void* consume(void* data) {
 				continue;
 			}
 
+			// Replace HTTP version
+			if (strcmp(parsedVer, "HTTP/1.1") == 0) {
+				parsedVer = (char*) "HTTP/1.0";
+			}
+
 			// Parse the headers into map as <key, value>
 			std::string::size_type index;
 			std::map<std::string, std::string> headerMap;

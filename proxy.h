@@ -66,9 +66,11 @@ void error(const char *err) {
 void termination_handler(int signum);
 void receiveMsg(int s, int size, char *ptr, bool headerOnly);
 void sendMsg(int s, int size, char *ptr);
+void cleanOnError(int sock, char* &dataBuf);
 void* consume(void* data);
 void cleanup();
 void setupSigHandlers();
 void initSynchronization();
+void initThreadPool();
 
 #endif /* PROXY_H_ */
