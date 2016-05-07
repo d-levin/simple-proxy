@@ -34,7 +34,8 @@ void receiveMsg(int s, int size, char *ptr, bool headerOnly) {
 	while ((size > 0) && (received = read(s, ptr, size - 1))) {
 		// Check error
 		if (received < 0 && !done) {
-			error("Read failed");
+			break;
+			//error("Read failed"); //
 		}
 
 		// Move pointer forward in struct by size of received data
